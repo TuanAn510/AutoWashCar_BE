@@ -1,0 +1,87 @@
+package com.shinecraft.server.catalog;
+
+import com.shinecraft.server.common.ApiException;
+import java.util.List;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class CatalogService {
+    private final ServiceCategoryRepository categoryRepository;
+    private final CarWashServiceRepository serviceRepository;
+
+    public CatalogService(ServiceCategoryRepository categoryRepository, CarWashServiceRepository serviceRepository) {
+        this.categoryRepository = categoryRepository;
+        this.serviceRepository = serviceRepository;
+    }
+
+    public List<CatalogDtos.CategoryResponse> categories() {
+        return categoryRepository.findByIsActiveTrueOrderByNameAsc().stream()
+                .map(CatalogDtos.CategoryResponse::from)
+                .toList();
+    }
+
+    public List<CatalogDtos.ServiceResponse> services() {
+        return serviceRepository.findByIsActiveTrueOrderByNameAsc().stream()
+                .map(CatalogDtos.ServiceResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public CatalogDtos.CategoryResponse createCategory(CatalogDtos.CategoryRequest request) {
+        if (categoryRepository.existsByNameIgnoreCase(request.name().trim())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Danh muc da ton tai");
+        }
+        ServiceCategory category = new ServiceCategory();
+        apply(category, request);
+        return CatalogDtos.CategoryResponse.from(categoryRepository.save(category));
+    }
+
+    @Transactional
+    public CatalogDtos.CategoryResponse updateCategory(Long id, CatalogDtos.CategoryRequest request) {
+        ServiceCategory category = categoryRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay danh muc"));
+        apply(category, request);
+        return CatalogDtos.CategoryResponse.from(category);
+    }
+
+    @Transactional
+    public CatalogDtos.ServiceResponse createService(CatalogDtos.ServiceRequest request) {
+        CarWashService service = new CarWashService();
+        apply(service, request);
+        return CatalogDtos.ServiceResponse.from(serviceRepository.save(service));
+    }
+
+    @Transactional
+    public CatalogDtos.ServiceResponse updateService(Long id, CatalogDtos.ServiceRequest request) {
+        CarWashService service = serviceRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay dich vu"));
+        apply(service, request);
+        return CatalogDtos.ServiceResponse.from(service);
+    }
+
+    private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request) {
+        category.setName(request.name().trim());
+        category.setDescription(request.description());
+        if (request.active() != null) {
+            category.setActive(request.active());
+        }
+    }
+
+    private void apply(CarWashService service, CatalogDtos.ServiceRequest request) {
+        ServiceCategory category = categoryRepository
+                .findById(request.categoryId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay danh muc dich vu"));
+        service.setCategory(category);
+        service.setName(request.name().trim());
+        service.setDescription(request.description());
+        service.setPrice(request.price());
+        service.setDurationMinutes(request.durationMinutes());
+        if (request.active() != null) {
+            service.setActive(request.active());
+        }
+    }
+}
