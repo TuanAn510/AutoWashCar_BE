@@ -19,7 +19,7 @@ public class ReportController {
 
     @GetMapping("/api/admin/dashboard/overview")
     ApiResponse<ReportDtos.DashboardResponse> dashboard() {
-        return ApiResponse.ok("Lay dashboard thanh cong", reportService.dashboard());
+        return ApiResponse.ok("Dashboard retrieved successfully", reportService.dashboard());
     }
 
     @GetMapping("/api/admin/reports/export/bookings.csv")

@@ -94,18 +94,18 @@ public class DataSeeder implements CommandLineRunner {
             return;
         }
         ServiceCategory wash = new ServiceCategory();
-        wash.setName("Rua xe");
-        wash.setDescription("Dich vu rua xe tieu chuan");
+        wash.setName("Car Wash");
+        wash.setDescription("Standard car wash services");
         categoryRepository.save(wash);
 
         ServiceCategory detailing = new ServiceCategory();
-        detailing.setName("Cham soc xe");
-        detailing.setDescription("Dich vu cham soc va ve sinh chuyen sau");
+        detailing.setName("Car Care");
+        detailing.setDescription("Care and deep cleaning services");
         categoryRepository.save(detailing);
 
-        createService(wash, "Rua xe co ban", "Lam sach ngoai that", "70000", 30);
-        createService(wash, "Rua xe cao cap", "Rua xe va hut bui noi that", "120000", 45);
-        createService(detailing, "Ve sinh noi that", "Lam sach noi that chuyen sau", "250000", 90);
+        createService(wash, "Basic Wash", "Exterior cleaning", "70000", 30);
+        createService(wash, "Premium Wash", "Exterior wash and interior vacuum", "120000", 45);
+        createService(detailing, "Interior Cleaning", "Deep interior cleaning", "250000", 90);
     }
 
     private void createService(ServiceCategory category, String name, String description, String price, int duration) {
@@ -123,16 +123,16 @@ public class DataSeeder implements CommandLineRunner {
             return;
         }
         Reward discount = new Reward();
-        discount.setName("Voucher giam 50k");
-        discount.setDescription("Doi diem lay ma giam gia 50.000 VND");
+        discount.setName("50K Discount Voucher");
+        discount.setDescription("Redeem points for a 50,000 VND discount code");
         discount.setRequiredPoints(300);
         discount.setRewardType(RewardType.DISCOUNT_CODE);
         discount.setDiscountAmount(new BigDecimal("50000"));
         rewardRepository.save(discount);
 
         Reward freeWash = new Reward();
-        freeWash.setName("Mot luot rua xe mien phi");
-        freeWash.setDescription("Doi diem lay mot lan rua xe mien phi");
+        freeWash.setName("Free Car Wash");
+        freeWash.setDescription("Redeem points for one free car wash");
         freeWash.setRequiredPoints(1000);
         freeWash.setRewardType(RewardType.FREE_WASH);
         rewardRepository.save(freeWash);

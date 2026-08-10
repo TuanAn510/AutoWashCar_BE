@@ -1,19 +1,19 @@
 # Week 1-4 Scope
 
-Muc tieu tuan 1-4: dung khung Spring Boot, san sang tich hop React dang ky/dang nhap/form booking, host tam de sinh vien/nhan vien FPT click dat lich gia lap va thu log.
+Week 1-4 objective: build the Spring Boot foundation, prepare integration points for React register/login/booking forms, and support temporary hosting so FPT students/staff can simulate booking clicks and generate survey logs.
 
-## Da hoan thien phia backend
+## Backend Completed
 
 - Spring Boot + MySQL + Flyway.
-- JWT auth cho customer/admin.
-- Register customer bang phone + license plate.
-- Login tra JWT token.
-- Catalog services public cho booking form.
-- Booking form API:
+- JWT authentication for customer/admin.
+- Customer registration with phone + license plate.
+- Login returns a JWT token.
+- Public catalog services for the booking form.
+- Booking form APIs:
   - `GET /api/bookings/availability?date=YYYY-MM-DD`
   - `POST /api/bookings`
   - `GET /api/bookings/my`
-- Survey log API:
+- Survey log APIs:
   - `POST /api/survey/logs` public
   - `GET /api/admin/survey/logs` admin
 - Health check:
@@ -21,38 +21,38 @@ Muc tieu tuan 1-4: dung khung Spring Boot, san sang tich hop React dang ky/dang 
 - Swagger/report presentation:
   - `GET /swagger-ui.html`
   - `GET /project-report.html`
-- CORS cau hinh bang `CORS_ALLOWED_ORIGINS`.
+- CORS is configurable through `CORS_ALLOWED_ORIGINS`.
 
-## Ràng buộc database quan trọng
+## Important Database Constraints
 
-- Tat ca bang co primary key `id BIGINT AUTO_INCREMENT`.
-- Phone user unique.
-- License plate unique.
-- Booking `scheduled_at` unique cho prototype mot slot mot booking.
-- Foreign key day du giua user, vehicle, booking, services, loyalty va survey logs.
-- Check constraints cho:
-  - role customer/admin
+- All tables use `id BIGINT AUTO_INCREMENT` as the primary key.
+- User phone is unique.
+- Vehicle license plate is unique.
+- Booking `scheduled_at` is unique for the week 1-4 one-slot-one-booking prototype.
+- Foreign keys connect users, vehicles, bookings, services, loyalty, promotions, rewards, and survey logs.
+- Check constraints cover:
+  - customer/admin roles
   - booking status
-  - promotion/reward/loyalty transaction type
-  - price, point, duration khong am
-  - promotion end date sau start date
+  - promotion/reward/loyalty transaction types
+  - non-negative price, points, and duration
+  - promotion end date after start date
 
-## Flow demo tuan 1-4
+## Week 1-4 Demo Flow
 
-1. Frontend goi `GET /api/health` de kiem tra backend.
-2. User mo trang dang ky, frontend goi `POST /api/survey/logs` voi `PAGE_VIEW`.
-3. User dang ky bang `POST /api/auth/register`.
-4. User login bang `POST /api/auth/login`.
-5. Form booking lay services bang `GET /api/catalog/services`.
-6. Form booking lay slot bang `GET /api/bookings/availability?date=YYYY-MM-DD`.
-7. User submit booking bang `POST /api/bookings`.
-8. Frontend ghi `BOOKING_CREATED` qua `POST /api/survey/logs`.
-9. Admin xem log bang `GET /api/admin/survey/logs`.
-10. Nhom thuyet trinh dung `/project-report.html` va `/swagger-ui.html` de trinh bay API/bao cao.
+1. Frontend calls `GET /api/health` to verify the backend.
+2. User opens the register page; frontend calls `POST /api/survey/logs` with `PAGE_VIEW`.
+3. User registers through `POST /api/auth/register`.
+4. User logs in through `POST /api/auth/login`.
+5. Booking form loads services through `GET /api/catalog/services`.
+6. Booking form loads slots through `GET /api/bookings/availability?date=YYYY-MM-DD`.
+7. User submits a booking through `POST /api/bookings`.
+8. Frontend records `BOOKING_CREATED` through `POST /api/survey/logs`.
+9. Admin views logs through `GET /api/admin/survey/logs`.
+10. The team presents API/reporting through `/project-report.html` and `/swagger-ui.html`.
 
-## Host tam
+## Temporary Hosting
 
-Bien moi truong can thiet:
+Required environment variables:
 
 ```powershell
 $env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
@@ -62,13 +62,13 @@ $env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
 $env:CORS_ALLOWED_ORIGINS="http://localhost:5173,https://your-temporary-frontend.example"
 ```
 
-Chay bang Maven Wrapper:
+Run with Maven Wrapper:
 
 ```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-Hoac build Docker:
+Or build with Docker:
 
 ```powershell
 docker build -t wash-car-service-server .

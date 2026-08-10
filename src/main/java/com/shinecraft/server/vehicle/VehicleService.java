@@ -29,7 +29,7 @@ public class VehicleService {
     public VehicleDtos.VehicleResponse create(VehicleDtos.VehicleRequest request) {
         String plate = normalizePlate(request.licensePlate());
         if (vehicleRepository.existsByLicensePlate(plate)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Bien so xe da ton tai");
+            throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }
         Vehicle vehicle = new Vehicle();
         vehicle.setCustomer(authService.currentUser());

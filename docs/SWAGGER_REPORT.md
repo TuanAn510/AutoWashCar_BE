@@ -1,15 +1,15 @@
 # Swagger And Project Report Tool
 
-Muc tieu: co mot cong cu truc quan de trinh bay API va noi dung bao cao project trong giai doan demo.
+Objective: provide a visual tool for presenting project APIs and report content during demos.
 
-## Cong cu da them
+## Tools Added
 
-- Swagger UI tu springdoc-openapi.
-- OpenAPI JSON/YAML tu runtime Spring Boot.
-- Project report page dang HTML.
-- Project report JSON endpoint de frontend hoac cong cu khac co the doc.
+- Swagger UI powered by springdoc-openapi.
+- OpenAPI JSON/YAML generated from the running Spring Boot application.
+- Static project report page in HTML.
+- Project report JSON endpoint that a frontend or other tool can consume.
 
-## URL khi chay local
+## Local URLs
 
 ```text
 http://localhost:8080/swagger-ui.html
@@ -18,44 +18,44 @@ http://localhost:8080/project-report.html
 http://localhost:8080/api/project-report
 ```
 
-## Cach dung Swagger khi demo
+## How To Use Swagger During Demo
 
-1. Chay backend.
-2. Mo `http://localhost:8080/swagger-ui.html`.
-3. Login bang `POST /api/auth/login`.
-4. Copy token trong response.
-5. Bam `Authorize`.
-6. Nhap:
+1. Start the backend.
+2. Open `http://localhost:8080/swagger-ui.html`.
+3. Log in through `POST /api/auth/login`.
+4. Copy the token from the response.
+5. Click `Authorize`.
+6. Enter:
 
 ```text
 Bearer <token>
 ```
 
-7. Goi thu cac API:
+7. Try these APIs:
    - `GET /api/health`
    - `GET /api/catalog/services`
    - `GET /api/bookings/availability?date=YYYY-MM-DD`
    - `POST /api/bookings`
    - `POST /api/survey/logs`
 
-## Noi dung report page
+## Report Page Content
 
-`/project-report.html` trinh bay:
+`/project-report.html` presents:
 
 - Architecture.
 - Week 1-4 features.
 - Database constraints.
 - Temporary hosting readiness.
-- Link nhanh sang Swagger UI va OpenAPI groups.
+- Quick links to Swagger UI and OpenAPI groups.
 
-## OpenAPI groups
+## OpenAPI Groups
 
-- `01-public-and-customer`: auth, catalog, customer booking, survey log public, report public.
+- `01-public-and-customer`: auth, catalog, customer booking, public survey log, public report.
 - `02-admin`: admin catalog, booking status, survey logs, dashboard, reports.
 
 ## Dependency
 
-Theo tai lieu springdoc chinh thuc, Swagger UI duoc kich hoat bang:
+Swagger UI is enabled by this dependency:
 
 ```xml
 <dependency>

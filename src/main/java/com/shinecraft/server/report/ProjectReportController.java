@@ -53,6 +53,6 @@ public class ProjectReportController {
                         new ProjectReportDtos.LinkItem("Admin API Group", "/v3/api-docs/02-admin"),
                         new ProjectReportDtos.LinkItem("Health Check", "/api/health")));
 
-        return ApiResponse.ok("Lay project report thanh cong", report);
+        return ApiResponse.ok("Project report retrieved successfully", report);
     }
 }

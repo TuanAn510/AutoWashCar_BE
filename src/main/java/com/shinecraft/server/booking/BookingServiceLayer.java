@@ -73,14 +73,14 @@ public class BookingServiceLayer {
         User customer = authService.currentUser();
         Vehicle vehicle = vehicleRepository
                 .findByIdAndCustomer(request.vehicleId(), customer)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay xe cua khach hang"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         validateBookingWindow(request.scheduledAt(), account);
         validateBookableSlot(request.scheduledAt());
 
         List<CarWashService> selectedServices = serviceRepository.findAllById(request.serviceIds());
         if (selectedServices.size() != request.serviceIds().size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Danh sach dich vu khong hop le");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
 
         BigDecimal subtotal = selectedServices.stream()
@@ -103,7 +103,7 @@ public class BookingServiceLayer {
             redemption = redemptionRepository
                     .findByIdAndCustomerAndStatus(
                             request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
-                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption khong kha dung"));
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
             discount = discount.add(discountForReward(subtotal.subtract(discount), redemption.getReward()));
             redemption.setStatus(RewardRedemptionStatus.USED);
             redemption.setUsedAt(LocalDateTime.now());
@@ -204,7 +204,7 @@ public class BookingServiceLayer {
     public BookingDtos.BookingResponse updateStatus(Long bookingId, BookingStatus status) {
         Booking booking = bookingRepository
                 .findById(bookingId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay booking"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
@@ -217,7 +217,7 @@ public class BookingServiceLayer {
                         booking.getCustomer(),
                         booking.getFinalAmount(),
                         points,
-                        "Tich diem tu booking #" + booking.getId(),
+                        "Earned points from booking #" + booking.getId(),
                         booking);
             }
         }
@@ -229,16 +229,16 @@ public class BookingServiceLayer {
         if (scheduledAt.isAfter(LocalDateTime.now().plusDays(windowDays))) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
-                    "Hang thanh vien hien tai chi duoc dat lich truoc " + windowDays + " ngay");
+                    "Current membership tier can only book up to " + windowDays + " days in advance");
         }
     }
 
     private void validateBookableSlot(LocalDateTime scheduledAt) {
         if (!isAlignedSlot(scheduledAt.toLocalTime())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Slot dat lich phai nam trong gio 08:00-17:00 va cach nhau 30 phut");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking slot must be between 08:00 and 17:00 and aligned to 30-minute intervals");
         }
         if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Slot nay da co booking khac");
+            throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
         }
     }
 

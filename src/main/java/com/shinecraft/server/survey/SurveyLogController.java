@@ -23,13 +23,13 @@ public class SurveyLogController {
     ApiResponse<SurveyDtos.EventLogResponse> create(
             @Valid @RequestBody SurveyDtos.EventLogRequest request, HttpServletRequest servletRequest) {
         return ApiResponse.ok(
-                "Ghi nhan survey log thanh cong",
+                "Survey log recorded successfully",
                 surveyLogService.create(request, clientIp(servletRequest), servletRequest.getHeader("User-Agent")));
     }
 
     @GetMapping("/api/admin/survey/logs")
     ApiResponse<List<SurveyDtos.EventLogResponse>> latest() {
-        return ApiResponse.ok("Lay survey log thanh cong", surveyLogService.latest());
+        return ApiResponse.ok("Survey logs retrieved successfully", surveyLogService.latest());
     }
 
     private String clientIp(HttpServletRequest request) {

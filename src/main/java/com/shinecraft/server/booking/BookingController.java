@@ -25,33 +25,33 @@ public class BookingController {
 
     @PostMapping("/api/bookings")
     ApiResponse<BookingDtos.BookingResponse> create(@Valid @RequestBody BookingDtos.CreateBookingRequest request) {
-        return ApiResponse.ok("Dat lich thanh cong", bookingService.create(request));
+        return ApiResponse.ok("Booking created successfully", bookingService.create(request));
     }
 
     @GetMapping("/api/bookings/my")
     ApiResponse<List<BookingDtos.BookingResponse>> myBookings() {
-        return ApiResponse.ok("Lay booking cua toi thanh cong", bookingService.myBookings());
+        return ApiResponse.ok("My bookings retrieved successfully", bookingService.myBookings());
     }
 
     @GetMapping("/api/bookings/availability")
     ApiResponse<BookingDtos.AvailabilityResponse> availability(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-        return ApiResponse.ok("Lay slot dat lich thanh cong", bookingService.availability(date));
+        return ApiResponse.ok("Booking availability retrieved successfully", bookingService.availability(date));
     }
 
     @GetMapping("/api/admin/bookings/today")
     ApiResponse<List<BookingDtos.BookingResponse>> today() {
-        return ApiResponse.ok("Lay booking trong ngay thanh cong", bookingService.todayBookings());
+        return ApiResponse.ok("Today's bookings retrieved successfully", bookingService.todayBookings());
     }
 
     @GetMapping("/api/admin/bookings/priority-queue")
     ApiResponse<List<BookingDtos.QueueItemResponse>> queue() {
-        return ApiResponse.ok("Lay hang doi uu tien thanh cong", bookingService.priorityQueue());
+        return ApiResponse.ok("Priority queue retrieved successfully", bookingService.priorityQueue());
     }
 
     @PatchMapping("/api/admin/bookings/{id}/status")
     ApiResponse<BookingDtos.BookingResponse> updateStatus(
             @PathVariable Long id, @Valid @RequestBody BookingDtos.UpdateStatusRequest request) {
-        return ApiResponse.ok("Cap nhat trang thai booking thanh cong", bookingService.updateStatus(id, request.status()));
+        return ApiResponse.ok("Booking status updated successfully", bookingService.updateStatus(id, request.status()));
     }
 }

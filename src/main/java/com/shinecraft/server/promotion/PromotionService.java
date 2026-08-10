@@ -50,13 +50,13 @@ public class PromotionService {
     @Transactional
     public PromotionDtos.PromotionResponse save(Long id, PromotionDtos.PromotionRequest request) {
         if (request.startAt().isAfter(request.endAt()) || request.startAt().isEqual(request.endAt())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Ngay ket thuc phai sau ngay bat dau");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "End date must be after start date");
         }
         Promotion promotion = id == null
                 ? new Promotion()
                 : promotionRepository
                         .findById(id)
-                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay promotion"));
+                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion not found"));
         promotion.setCode(request.code().trim().toUpperCase());
         promotion.setTitle(request.title().trim());
         promotion.setDescription(request.description());
@@ -68,7 +68,7 @@ public class PromotionService {
         if (request.targetTierId() != null) {
             promotion.setTargetTier(tierRepository
                     .findById(request.targetTierId())
-                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay tier muc tieu")));
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Target membership tier not found")));
         } else {
             promotion.setTargetTier(null);
         }
@@ -83,18 +83,18 @@ public class PromotionService {
         Promotion promotion = promotionRepository
                 .findById(promotionId)
                 .filter(Promotion::isActive)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion khong kha dung"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion is not available"));
         LocalDateTime now = LocalDateTime.now();
         if (promotion.getStartAt().isAfter(now) || promotion.getEndAt().isBefore(now)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion khong nam trong thoi gian ap dung");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion is not within its active period");
         }
         if (promotion.getUsageLimit() != null && promotion.getUsedCount() >= promotion.getUsageLimit()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion da het luot su dung");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion usage limit has been reached");
         }
         if (promotion.getTargetTier() != null) {
             MembershipTier tier = account.getMembershipTier();
             if (tier == null || !promotion.getTargetTier().getId().equals(tier.getId())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Promotion khong ap dung cho hang hien tai");
+                throw new ApiException(HttpStatus.FORBIDDEN, "Promotion does not apply to the current membership tier");
             }
         }
         promotion.setUsedCount(promotion.getUsedCount() + 1);

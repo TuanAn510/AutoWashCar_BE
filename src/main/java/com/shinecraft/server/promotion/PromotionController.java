@@ -22,22 +22,22 @@ public class PromotionController {
 
     @GetMapping("/api/promotions/active")
     ApiResponse<List<PromotionDtos.PromotionResponse>> active() {
-        return ApiResponse.ok("Lay promotion kha dung thanh cong", promotionService.activeForCurrentCustomer());
+        return ApiResponse.ok("Available promotions retrieved successfully", promotionService.activeForCurrentCustomer());
     }
 
     @GetMapping("/api/admin/promotions")
     ApiResponse<List<PromotionDtos.PromotionResponse>> all() {
-        return ApiResponse.ok("Lay promotion admin thanh cong", promotionService.all());
+        return ApiResponse.ok("Admin promotions retrieved successfully", promotionService.all());
     }
 
     @PostMapping("/api/admin/promotions")
     ApiResponse<PromotionDtos.PromotionResponse> create(@Valid @RequestBody PromotionDtos.PromotionRequest request) {
-        return ApiResponse.ok("Tao promotion thanh cong", promotionService.save(null, request));
+        return ApiResponse.ok("Promotion created successfully", promotionService.save(null, request));
     }
 
     @PutMapping("/api/admin/promotions/{id}")
     ApiResponse<PromotionDtos.PromotionResponse> update(
             @PathVariable Long id, @Valid @RequestBody PromotionDtos.PromotionRequest request) {
-        return ApiResponse.ok("Cap nhat promotion thanh cong", promotionService.save(id, request));
+        return ApiResponse.ok("Promotion updated successfully", promotionService.save(id, request));
     }
 }

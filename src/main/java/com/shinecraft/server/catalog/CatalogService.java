@@ -31,7 +31,7 @@ public class CatalogService {
     @Transactional
     public CatalogDtos.CategoryResponse createCategory(CatalogDtos.CategoryRequest request) {
         if (categoryRepository.existsByNameIgnoreCase(request.name().trim())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Danh muc da ton tai");
+            throw new ApiException(HttpStatus.CONFLICT, "Service category already exists");
         }
         ServiceCategory category = new ServiceCategory();
         apply(category, request);
@@ -42,7 +42,7 @@ public class CatalogService {
     public CatalogDtos.CategoryResponse updateCategory(Long id, CatalogDtos.CategoryRequest request) {
         ServiceCategory category = categoryRepository
                 .findById(id)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay danh muc"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service category not found"));
         apply(category, request);
         return CatalogDtos.CategoryResponse.from(category);
     }
@@ -58,7 +58,7 @@ public class CatalogService {
     public CatalogDtos.ServiceResponse updateService(Long id, CatalogDtos.ServiceRequest request) {
         CarWashService service = serviceRepository
                 .findById(id)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay dich vu"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service not found"));
         apply(service, request);
         return CatalogDtos.ServiceResponse.from(service);
     }
@@ -74,7 +74,7 @@ public class CatalogService {
     private void apply(CarWashService service, CatalogDtos.ServiceRequest request) {
         ServiceCategory category = categoryRepository
                 .findById(request.categoryId())
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay danh muc dich vu"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service category not found"));
         service.setCategory(category);
         service.setName(request.name().trim());
         service.setDescription(request.description());

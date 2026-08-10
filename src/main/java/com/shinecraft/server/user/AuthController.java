@@ -21,16 +21,16 @@ public class AuthController {
 
     @PostMapping("/register")
     ApiResponse<UserDtos.AuthResponse> register(@Valid @RequestBody UserDtos.RegisterRequest request) {
-        return ApiResponse.ok("Dang ky thanh cong", authService.register(request));
+        return ApiResponse.ok("Registration successful", authService.register(request));
     }
 
     @PostMapping("/login")
     ApiResponse<UserDtos.AuthResponse> login(@Valid @RequestBody UserDtos.LoginRequest request) {
-        return ApiResponse.ok("Dang nhap thanh cong", authService.login(request));
+        return ApiResponse.ok("Login successful", authService.login(request));
     }
 
     @GetMapping("/me")
     ApiResponse<UserDtos.UserResponse> me() {
-        return ApiResponse.ok("Lay thong tin nguoi dung thanh cong", UserDtos.UserResponse.from(authService.currentUser()));
+        return ApiResponse.ok("Current user retrieved successfully", UserDtos.UserResponse.from(authService.currentUser()));
     }
 }

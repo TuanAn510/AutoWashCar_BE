@@ -62,7 +62,7 @@ public class LoyaltyService {
                 ? new MembershipTier()
                 : tierRepository
                         .findById(id)
-                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay hang thanh vien"));
+                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Membership tier not found"));
         tier.setName(request.name().trim());
         tier.setMinPoints(request.minPoints());
         tier.setDiscountPercent(request.discountPercent());
@@ -97,7 +97,7 @@ public class LoyaltyService {
                 ? new Reward()
                 : rewardRepository
                         .findById(id)
-                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay reward"));
+                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward not found"));
         reward.setName(request.name().trim());
         reward.setDescription(request.description());
         reward.setRequiredPoints(request.requiredPoints());
@@ -106,7 +106,7 @@ public class LoyaltyService {
         if (request.addOnServiceId() != null) {
             CarWashService service = carWashServiceRepository
                     .findById(request.addOnServiceId())
-                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay dich vu add-on"));
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Add-on service not found"));
             reward.setAddOnService(service);
         } else {
             reward.setAddOnService(null);
@@ -123,10 +123,10 @@ public class LoyaltyService {
         Reward reward = rewardRepository
                 .findById(rewardId)
                 .filter(Reward::isActive)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward khong kha dung"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward is not available"));
         LoyaltyAccount account = getOrCreateAccount(customer);
         if (account.getCurrentPoints() < reward.getRequiredPoints()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Khong du diem de doi reward");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Not enough points to redeem this reward");
         }
 
         account.setCurrentPoints(account.getCurrentPoints() - reward.getRequiredPoints());
@@ -146,7 +146,7 @@ public class LoyaltyService {
         transaction.setRedemption(redemption);
         transaction.setType(LoyaltyTransactionType.REDEEM);
         transaction.setPoints(-reward.getRequiredPoints());
-        transaction.setDescription("Doi reward " + reward.getName());
+        transaction.setDescription("Redeemed reward " + reward.getName());
         transactionRepository.save(transaction);
 
         return LoyaltyDtos.RedemptionResponse.from(redemption);
@@ -218,7 +218,7 @@ public class LoyaltyService {
             transaction.setCustomer(earn.getCustomer());
             transaction.setType(LoyaltyTransactionType.EXPIRE);
             transaction.setPoints(-expired);
-            transaction.setDescription("Het han diem sau " + pointExpiryMonths + " thang");
+            transaction.setDescription("Points expired after " + pointExpiryMonths + " months");
             transactionRepository.save(transaction);
             earn.setPoints(0);
             expiredTotal += expired;

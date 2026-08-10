@@ -41,7 +41,7 @@ public class SurveyLogService {
         if (request.bookingId() != null) {
             Booking booking = bookingRepository
                     .findById(request.bookingId())
-                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Khong tim thay booking de gan log"));
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found for survey log"));
             log.setBooking(booking);
         }
 

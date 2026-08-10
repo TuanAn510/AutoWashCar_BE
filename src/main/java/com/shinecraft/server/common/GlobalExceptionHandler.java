@@ -23,12 +23,12 @@ public class GlobalExceptionHandler {
         for (FieldError error : exception.getBindingResult().getFieldErrors()) {
             errors.put(error.getField(), error.getDefaultMessage());
         }
-        return ResponseEntity.badRequest().body(ApiResponse.fail("Du lieu khong hop le", errors));
+        return ResponseEntity.badRequest().body(ApiResponse.fail("Invalid request data", errors));
     }
 
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiResponse<Map<String, Object>>> handleUnexpected(Exception exception) {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.fail("Loi he thong", Map.of("error", exception.getMessage())));
+                .body(ApiResponse.fail("Internal server error", Map.of("error", exception.getMessage())));
     }
 }

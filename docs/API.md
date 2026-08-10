@@ -1,6 +1,6 @@
 # API Documentation
 
-Base URL mac dinh: `http://localhost:8080`
+Default base URL: `http://localhost:8080`
 
 Interactive API documentation:
 
@@ -10,7 +10,7 @@ Interactive API documentation:
 - Admin group: `/v3/api-docs/02-admin`
 - Project report page: `/project-report.html`
 
-Response JSON chuan:
+Standard response format:
 
 ```json
 {
@@ -20,7 +20,7 @@ Response JSON chuan:
 }
 ```
 
-Dung JWT:
+JWT header:
 
 ```text
 Authorization: Bearer <token>
@@ -30,19 +30,19 @@ Authorization: Bearer <token>
 
 `GET /api/health`
 
-Public endpoint dung de kiem tra backend khi host tam.
+Public endpoint used to verify that the temporarily hosted backend is running.
 
 `POST /api/auth/register`
 
 ```json
 {
-  "fullName": "Nguyen Van A",
+  "fullName": "John Nguyen",
   "phone": "0912345678",
   "password": "Password@123",
   "licensePlate": "59A12345",
   "brand": "Toyota",
   "model": "Vios",
-  "color": "Trang",
+  "color": "White",
   "manufactureYear": 2022
 }
 ```
@@ -135,7 +135,7 @@ Promotion request:
 {
   "code": "SILVER10",
   "title": "Silver plus",
-  "description": "Khuyen mai cho tier Silver",
+  "description": "Promotion for Silver tier customers",
   "discountType": "PERCENTAGE",
   "discountValue": 10,
   "targetTierId": 2,
@@ -163,7 +163,7 @@ Booking request:
   "scheduledAt": "2026-08-15T09:00:00",
   "promotionId": null,
   "rewardRedemptionId": null,
-  "note": "Rua xe buoi sang"
+  "note": "Morning car wash"
 }
 ```
 
@@ -181,7 +181,7 @@ Status request:
 }
 ```
 
-Availability response tra slot 08:00-17:00, cach nhau 30 phut:
+Availability response returns 08:00-17:00 slots in 30-minute intervals:
 
 ```json
 {
@@ -197,7 +197,7 @@ Availability response tra slot 08:00-17:00, cach nhau 30 phut:
 }
 ```
 
-`reason` co the la `PAST`, `OUT_OF_TIER_WINDOW`, hoac `BOOKED`.
+`reason` can be `PAST`, `OUT_OF_TIER_WINDOW`, or `BOOKED`.
 
 ## Survey Logs
 

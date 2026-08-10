@@ -42,10 +42,10 @@ public class AuthService {
         String phone = request.phone().trim();
         String licensePlate = normalizePlate(request.licensePlate());
         if (userRepository.existsByPhone(phone)) {
-            throw new ApiException(HttpStatus.CONFLICT, "So dien thoai da ton tai");
+            throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
         }
         if (vehicleRepository.existsByLicensePlate(licensePlate)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Bien so xe da ton tai");
+            throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }
 
         User user = new User();
@@ -78,10 +78,10 @@ public class AuthService {
         User user = userRepository
                 .findByPhone(request.phone().trim())
                 .filter(User::isActive)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Thong tin dang nhap khong dung"));
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid phone number or password"));
 
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "Thong tin dang nhap khong dung");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid phone number or password");
         }
 
         return authResponse(user);
@@ -91,7 +91,7 @@ public class AuthService {
         String phone = SecurityContextHolder.getContext().getAuthentication().getName();
         return userRepository
                 .findByPhone(phone)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Chua dang nhap"));
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Authentication is required"));
     }
 
     private UserDtos.AuthResponse authResponse(User user) {

@@ -22,11 +22,11 @@ public class VehicleController {
 
     @GetMapping("/my")
     ApiResponse<List<VehicleDtos.VehicleResponse>> myVehicles() {
-        return ApiResponse.ok("Lay danh sach xe thanh cong", vehicleService.myVehicles());
+        return ApiResponse.ok("Vehicles retrieved successfully", vehicleService.myVehicles());
     }
 
     @PostMapping
     ApiResponse<VehicleDtos.VehicleResponse> create(@Valid @RequestBody VehicleDtos.VehicleRequest request) {
-        return ApiResponse.ok("Tao xe thanh cong", vehicleService.create(request));
+        return ApiResponse.ok("Vehicle created successfully", vehicleService.create(request));
     }
 }

@@ -1,20 +1,43 @@
-# Wash Car Service Spring Boot Backend
+# Wash Car Service Backend
 
-Backend Java Spring Boot + MySQL cho project wash car service, dat lich rua xe va loyalty tier progression.
+Spring Boot backend for a wash car service project. The system focuses on two roles, `CUSTOMER` and `ADMIN`, and supports registration, login, vehicle management, booking, service catalog management, loyalty tiers, rewards, promotions, survey logs, Swagger API documentation, and a project report page.
 
-## Stack
+This repository is written and documented in English.
+
+## Technology Stack
 
 - Java 17
 - Spring Boot 4.1.0
-- Spring Web MVC, Spring Security, Spring Data JPA
-- MySQL + Flyway migration
-- JWT authentication
-- Maven Wrapper, khong can cai Maven global
+- Spring Web MVC
+- Spring Security + JWT
+- Spring Data JPA
+- MySQL
+- Flyway database migration
+- springdoc-openapi Swagger UI
+- Maven Wrapper
 
-## Chay local
+## Project Scope
 
-1. Tao database MySQL local, hoac de app tu tao database qua JDBC option `createDatabaseIfNotExist=true`.
-2. Cau hinh bien moi truong neu khac mac dinh:
+The current implementation prioritizes the week 1-4 project milestone:
+
+- Build the Spring Boot backend foundation.
+- Prepare APIs for React registration, login, and booking forms.
+- Use local MySQL as the main database.
+- Provide Swagger UI for API presentation.
+- Provide a report page for project demonstration.
+- Support temporary hosting so users can simulate bookings and generate survey logs.
+
+The frontend is intentionally not modified in this backend workspace.
+
+## Roles
+
+- `ROLE_CUSTOMER`: registers, logs in, manages vehicles, checks available slots, creates bookings, views loyalty data, redeems rewards, and sees eligible promotions.
+- `ROLE_ADMIN`: manages catalog data, membership tiers, rewards, promotions, booking status, survey logs, reports, and dashboard metrics.
+
+## Local Setup
+
+1. Create a local MySQL database, or let the application create it through the JDBC option `createDatabaseIfNotExist=true`.
+2. Configure environment variables if your local values differ from the defaults:
 
 ```powershell
 $env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
@@ -23,83 +46,121 @@ $env:DB_PASSWORD="your_mysql_password"
 $env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
 ```
 
-3. Chay backend:
+3. Start the backend:
 
 ```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-4. Tai khoan admin seed mac dinh:
+## Default Admin Account
 
 ```text
 phone: 0900000000
 password: Admin@123456
 ```
 
-Co the doi bang `ADMIN_SEED_PHONE` va `ADMIN_SEED_PASSWORD`.
+The default admin account can be changed with:
 
-## Swagger va report hub
+- `ADMIN_SEED_PHONE`
+- `ADMIN_SEED_PASSWORD`
 
-Sau khi backend chay:
+## Swagger And Project Report
+
+After the backend starts, open these URLs:
 
 - Swagger UI: `http://localhost:8080/swagger-ui.html`
 - OpenAPI JSON: `http://localhost:8080/v3/api-docs`
+- Public/customer OpenAPI group: `http://localhost:8080/v3/api-docs/01-public-and-customer`
+- Admin OpenAPI group: `http://localhost:8080/v3/api-docs/02-admin`
 - Project report page: `http://localhost:8080/project-report.html`
 - Project report JSON: `http://localhost:8080/api/project-report`
 
-Trong Swagger UI, bam `Authorize` va nhap JWT theo dang:
+To test secured endpoints in Swagger UI:
+
+1. Call `POST /api/auth/login`.
+2. Copy the returned token.
+3. Click `Authorize`.
+4. Enter the token in this format:
 
 ```text
 Bearer <token>
 ```
 
-## Build va test
+## Build And Test
 
 ```powershell
 .\mvnw.cmd test
 .\mvnw.cmd package
 ```
 
-## Module da co
+## Main Modules
 
-- Auth: dang ky customer bang phone + license plate, login JWT, lay profile hien tai.
-- Vehicle: customer quan ly xe cua minh.
-- Catalog: service categories va services.
-- Booking availability: tra slot trong 08:00-17:00 moi 30 phut cho form booking.
-- Loyalty Engine: point balance, transactions, tier auto update, monthly review scheduler, point expiry 12 thang.
-- Booking: dat lich, gioi han booking window theo tier, checkout discount, status lifecycle.
-- Priority Queue: admin xem hang doi uu tien theo tier.
-- Promotion: promotion theo tier, customer chi thay promotion phu hop.
-- Rewards: customer doi diem lay voucher/free wash/add-on.
-- Survey logs: ghi nhan page view/click/form submit/booking created de chay survey lay log.
-- Dashboard/Report: overview va export booking CSV cho RBL/data science.
+- Auth: customer registration, admin/customer login, JWT authentication, current user profile.
+- Vehicle: customer-owned vehicle management.
+- Catalog: service categories and car wash services.
+- Booking: slot availability, booking creation, booking history, status lifecycle.
+- Loyalty: point balance, earned/redeemed/expired transactions, automatic tier updates.
+- Rewards: point redemption for vouchers, free wash, or add-on rewards.
+- Promotions: tier-targeted discounts with active dates and usage limits.
+- Survey Logs: public event logging for temporary survey/testing sessions.
+- Reports: admin dashboard metrics and booking CSV export.
+- Project Report: static HTML and JSON report endpoints for presentation.
 
-Project chi co 2 role chinh:
+## Database Summary
 
-- `ROLE_CUSTOMER`
-- `ROLE_ADMIN`
+The schema is managed by Flyway in:
 
-## Mapping yeu cau
+```text
+src/main/resources/db/migration/V1__init_schema.sql
+```
 
-| Yeu cau | Trang thai |
+Main tables:
+
+- `users`
+- `vehicles`
+- `service_categories`
+- `services`
+- `membership_tiers`
+- `loyalty_accounts`
+- `loyalty_transactions`
+- `promotions`
+- `rewards`
+- `reward_redemptions`
+- `bookings`
+- `booking_services`
+- `survey_event_logs`
+
+Important constraints:
+
+- Primary keys are defined on all tables.
+- User phone numbers are unique.
+- Vehicle license plates are unique.
+- Booking slots are unique in the week 1-4 prototype.
+- Foreign keys connect users, vehicles, bookings, services, loyalty, promotions, rewards, and survey logs.
+- Check constraints protect roles, statuses, enum values, price values, point values, durations, and promotion date ranges.
+
+## Requirement Mapping
+
+| Requirement | Status |
 |---|---|
-| Java Spring Boot backend | Da dung |
-| MySQL local | Da cau hinh |
-| Users phone + license plate | Da co trong register |
-| ROLE_CUSTOMER va ROLE_ADMIN | Da co |
-| Loyalty tracking | Da co |
-| Auto-tiering monthly review | Da co scheduler ngay 1 hang thang |
-| Point expiry 12 thang | Da co scheduler/logic expiry |
-| Booking window Member/Silver/Gold/Platinum | Da seed 7/10/12/14 ngay |
-| Priority queue theo tier | Da co endpoint admin |
-| Promotion target theo tier | Da co |
-| Bo payment online/refund | Khong tich hop payment gateway |
-| Export data CSV/JSON cho RBL | Da co CSV booking, co the mo rong JSON |
+| Spring Boot backend | Implemented |
+| Local MySQL database | Implemented |
+| Two main roles: customer and admin | Implemented |
+| Customer registration and login | Implemented |
+| Booking form API support | Implemented |
+| Survey log collection | Implemented |
+| Swagger UI documentation | Implemented |
+| Project report page | Implemented |
+| Database primary keys and constraints | Implemented |
+| Loyalty tracking and tier progression | Implemented |
+| Reward redemption | Implemented |
+| Tier-targeted promotions | Implemented |
+| Admin dashboard and CSV export | Implemented |
 
-## Tai lieu chi tiet
+## Documentation
 
-- [API.md](docs/API.md)
-- [DATABASE.md](docs/DATABASE.md)
-- [REPORT.md](docs/REPORT.md)
-- [WEEK1_4.md](docs/WEEK1_4.md)
-- [SWAGGER_REPORT.md](docs/SWAGGER_REPORT.md)
+- [API Documentation](docs/API.md)
+- [Database Design](docs/DATABASE.md)
+- [Project Report Notes](docs/REPORT.md)
+- [Week 1-4 Scope](docs/WEEK1_4.md)
+- [Swagger And Project Report Tool](docs/SWAGGER_REPORT.md)

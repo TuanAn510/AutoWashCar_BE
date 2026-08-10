@@ -2,25 +2,25 @@
 
 Database: MySQL.
 
-Migration chinh: `src/main/resources/db/migration/V1__init_schema.sql`.
+Main migration: `src/main/resources/db/migration/V1__init_schema.sql`.
 
-## Bang chinh
+## Main Tables
 
-- `users`: customer/admin account, phone unique, password hash, role.
-- `vehicles`: xe cua customer, license plate unique.
-- `service_categories`: nhom dich vu.
-- `services`: dich vu rua xe, gia va thoi luong.
-- `membership_tiers`: tier rule gom min points, discount percent, booking window days, priority level.
-- `loyalty_accounts`: diem hien tai, diem tich luy, tong chi tieu, so lan ghe, tier hien tai.
-- `loyalty_transactions`: lich su earn/redeem/expire/adjust.
-- `promotions`: ma khuyen mai, target tier, thoi gian, usage limit.
-- `rewards`: phan thuong doi diem.
-- `reward_redemptions`: reward customer da doi va ma redemption.
-- `bookings`: lich dat rua xe, tong tien, discount, trang thai.
-- `booking_services`: snapshot dich vu trong booking.
-- `survey_event_logs`: log hanh vi click/page view/form submit trong giai doan survey.
+- `users`: customer/admin accounts, unique phone, password hash, role.
+- `vehicles`: customer vehicles with unique license plates.
+- `service_categories`: service groups.
+- `services`: wash car services with price and duration.
+- `membership_tiers`: tier rules including minimum points, discount percentage, booking window days, and priority level.
+- `loyalty_accounts`: current points, lifetime points, total spending, visit count, and current tier.
+- `loyalty_transactions`: earn/redeem/expire/adjust transaction history.
+- `promotions`: discount codes, target tier, active period, and usage limit.
+- `rewards`: point redemption rewards.
+- `reward_redemptions`: customer reward redemptions and redemption codes.
+- `bookings`: wash car bookings, total amount, discount, and status.
+- `booking_services`: service snapshots inside each booking.
+- `survey_event_logs`: page view, click, form submit, and booking-created logs for the survey period.
 
-## Quan he noi bat
+## Key Relationships
 
 - `users 1-n vehicles`
 - `users 1-1 loyalty_accounts`
@@ -33,11 +33,11 @@ Migration chinh: `src/main/resources/db/migration/V1__init_schema.sql`.
 - `bookings 1-n survey_event_logs`
 - `rewards 1-n reward_redemptions`
 
-## Business rules trong DB/model
+## Business Rules In DB/Model
 
-- Phone va license plate la unique.
-- Moi booking slot `scheduled_at` la unique trong prototype tuan 1-4.
-- Booking luu snapshot dich vu qua `booking_services`.
-- Tier khong hard-code trong code; admin co the cau hinh bang API.
-- Seed mac dinh tao Member/Silver/Gold/Platinum voi booking window 7/10/12/14 ngay.
-- DB co check constraints cho role, status, diem, gia tien, thoi gian promotion va enum nghiep vu.
+- User phone and vehicle license plate are unique.
+- Each booking slot `scheduled_at` is unique in the week 1-4 prototype.
+- Booking services are stored as snapshots in `booking_services`.
+- Tiers are not hard-coded in service logic; admin can configure them through API.
+- Default seed data creates Member/Silver/Gold/Platinum with booking windows of 7/10/12/14 days.
+- The database includes check constraints for role, status, points, prices, service duration, promotion time ranges, and business enums.
