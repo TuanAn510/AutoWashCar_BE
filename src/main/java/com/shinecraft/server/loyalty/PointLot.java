@@ -1,4 +1,4 @@
-package com.shinecraft.server.vehicle;
+package com.shinecraft.server.loyalty;
 
 import com.shinecraft.server.common.BaseEntity;
 import com.shinecraft.server.user.User;
@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 import lombok.Getter;
@@ -20,8 +21,8 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "vehicles")
-public class Vehicle extends BaseEntity {
+@Table(name = "point_lots")
+public class PointLot extends BaseEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -30,25 +31,19 @@ public class Vehicle extends BaseEntity {
     @JoinColumn(name = "customer_id")
     private User customer;
 
-    @Column(nullable = false, length = 20)
-    private String licensePlate;
-
-    @Column(nullable = false, length = 80)
-    private String brand;
-
-    @Column(nullable = false, length = 80)
-    private String model;
-
-    @Column(length = 40)
-    private String color;
-
-    private Integer manufactureYear;
+    @OneToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "earn_transaction_id")
+    private LoyaltyTransaction earnTransaction;
 
     @Column(nullable = false)
-    private boolean isActive = true;
+    private Integer initialPoints;
 
     @Column(nullable = false)
-    private LocalDateTime ownershipStartAt = LocalDateTime.now();
+    private Integer remainingPoints;
 
-    private LocalDateTime ownershipEndAt;
+    @Column(nullable = false)
+    private LocalDateTime earnedAt;
+
+    @Column(nullable = false)
+    private LocalDateTime expiresAt;
 }

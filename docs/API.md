@@ -58,6 +58,42 @@ Public endpoint used to verify that the temporarily hosted backend is running.
 
 `GET /api/auth/me`
 
+Requires a valid JWT.
+
+Phone numbers are normalized before persistence and login lookup. For example, local digits and `+84` input resolve to the same stored phone where applicable.
+
+## Admin Users
+
+- `GET /api/admin/users?keyword=&role=&active=`
+- `GET /api/admin/users/{id}`
+- `PATCH /api/admin/users/{id}/status`
+- `PATCH /api/admin/users/{id}/role`
+- `POST /api/admin/users/{id}/reset-password`
+
+Status request:
+
+```json
+{
+  "active": false
+}
+```
+
+Role request:
+
+```json
+{
+  "role": "ROLE_ADMIN"
+}
+```
+
+Password reset request:
+
+```json
+{
+  "newPassword": "NewPassword@123"
+}
+```
+
 ## Catalog
 
 Public:
@@ -116,6 +152,12 @@ Admin:
 
 - `POST /api/admin/rewards`
 - `PUT /api/admin/rewards/{id}`
+
+Reward types:
+
+- `DISCOUNT_CODE`: applies a fixed discount amount.
+- `FREE_WASH`: discounts the whole booking subtotal.
+- `ADD_ON`: adds the configured add-on service for free, or discounts it if the customer already selected it.
 
 ## Promotions
 
@@ -177,9 +219,15 @@ Status request:
 
 ```json
 {
-  "status": "COMPLETED"
+  "status": "CONFIRMED"
 }
 ```
+
+Status workflow:
+
+- `PENDING -> CONFIRMED -> IN_QUEUE -> IN_PROGRESS -> COMPLETED`
+- `PENDING`, `CONFIRMED`, and `IN_QUEUE` can be cancelled.
+- `COMPLETED` and `CANCELLED` are terminal.
 
 Availability response returns 08:00-17:00 slots in 30-minute intervals:
 
