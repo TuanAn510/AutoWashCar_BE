@@ -227,6 +227,52 @@ class BookingServiceLayerTest {
                 .hasMessage("Booking duration must end by 17:00");
     }
 
+    @Test
+    void statusAllowsEachRequiredProgressTransition() {
+        assertAllowedTransition(BookingStatus.PENDING, BookingStatus.CONFIRMED);
+        assertAllowedTransition(BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE);
+        assertAllowedTransition(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void statusAllowsCancellationFromEveryNonTerminalStatus() {
+        assertAllowedTransition(BookingStatus.PENDING, BookingStatus.CANCELLED);
+        assertAllowedTransition(BookingStatus.CONFIRMED, BookingStatus.CANCELLED);
+        assertAllowedTransition(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED);
+        assertAllowedTransition(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED);
+    }
+
+    @Test
+    void statusAllowsInProgressToCompletedAndPreservesCompletionSideEffects() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_PROGRESS);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.COMPLETED);
+
+        assertThat(response.status()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(booking.getCompletedAt()).isNotNull();
+        assertThat(booking.getEarnedPoints()).isEqualTo(1);
+        verify(loyaltyService).earnPoints(
+                customer, BigDecimal.valueOf(10000), 1, "Earned points from booking #99", booking);
+    }
+
+    @Test
+    void statusRejectsSkippingIntermediateStates() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid booking status transition from PENDING to IN_PROGRESS");
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+    }
+
+    @Test
+    void statusRejectsTransitionsOutOfTerminalStates() {
+        assertInvalidTransition(BookingStatus.COMPLETED, BookingStatus.CONFIRMED);
+        assertInvalidTransition(BookingStatus.CANCELLED, BookingStatus.CONFIRMED);
+    }
+
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt) {
         return new BookingDtos.CreateBookingRequest(1L, List.of(1L), scheduledAt, null, null, null);
     }
@@ -256,6 +302,37 @@ class BookingServiceLayerTest {
         service.setPrice(BigDecimal.TEN);
         service.setActive(true);
         return service;
+    }
+
+    private void assertAllowedTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
+        Booking booking = bookingWithStatus(currentStatus);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, requestedStatus);
+
+        assertThat(response.status()).isEqualTo(requestedStatus);
+    }
+
+    private void assertInvalidTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
+        Booking booking = bookingWithStatus(currentStatus);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, requestedStatus))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
+        assertThat(booking.getStatus()).isEqualTo(currentStatus);
+    }
+
+    private Booking bookingWithStatus(BookingStatus status) {
+        Booking booking = new Booking();
+        booking.setId(99L);
+        booking.setCustomer(customer);
+        booking.setVehicle(new Vehicle());
+        booking.setStatus(status);
+        booking.setSubtotalAmount(BigDecimal.valueOf(10000));
+        booking.setDiscountAmount(BigDecimal.ZERO);
+        booking.setFinalAmount(BigDecimal.valueOf(10000));
+        return booking;
     }
 
     private void assertSlot(

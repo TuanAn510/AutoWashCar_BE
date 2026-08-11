@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -37,6 +38,13 @@ public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
     private static final int SLOT_MINUTES = 30;
+    private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
+            BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
+            BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
+            BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
+            BookingStatus.COMPLETED, Set.of(),
+            BookingStatus.CANCELLED, Set.of());
     private final BookingRepository bookingRepository;
     private final VehicleRepository vehicleRepository;
     private final CarWashServiceRepository serviceRepository;
@@ -204,6 +212,7 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
+        validateStatusTransition(booking.getStatus(), status);
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
@@ -221,6 +230,14 @@ public class BookingServiceLayer {
             }
         }
         return BookingDtos.BookingResponse.from(booking);
+    }
+
+    private void validateStatusTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
+        if (!ALLOWED_STATUS_TRANSITIONS.getOrDefault(currentStatus, Set.of()).contains(requestedStatus)) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
+        }
     }
 
     private void validateBookingWindow(LocalDateTime scheduledAt, LoyaltyAccount account) {
