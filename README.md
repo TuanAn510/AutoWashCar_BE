@@ -41,6 +41,7 @@ The frontend is intentionally not modified in this backend workspace.
 
 ```powershell
 $env:DB_URL="jdbc:sqlserver://localhost:1433;databaseName=wash_car_service;encrypt=false;trustServerCertificate=true"
+$env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
 $env:DB_USERNAME="sa"
 $env:DB_PASSWORD="sa"
 $env:JWT_SECRET="changit diffge-this-to-a-long-secret-at-least-32-bytes"
