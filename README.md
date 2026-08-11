@@ -41,9 +41,9 @@ The frontend is intentionally not modified in this backend workspace.
 
 ```powershell
 $env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
-$env:DB_USERNAME="root"
-$env:DB_PASSWORD="your_mysql_password"
-$env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
+$env:DB_USERNAME="sa"
+$env:DB_PASSWORD="sa"
+$env:JWT_SECRET="changit diffge-this-to-a-long-secret-at-least-32-bytes"
 ```
 
 3. Start the backend:
