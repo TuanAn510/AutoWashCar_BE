@@ -100,4 +100,11 @@ public class PromotionService {
         promotion.setUsedCount(promotion.getUsedCount() + 1);
         return promotion;
     }
+
+    public void restoreUsage(Promotion promotion) {
+        if (promotion.getUsedCount() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion usage cannot be restored");
+        }
+        promotion.setUsedCount(promotion.getUsedCount() - 1);
+    }
 }

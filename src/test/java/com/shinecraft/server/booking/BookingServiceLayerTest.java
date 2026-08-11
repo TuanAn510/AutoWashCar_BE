@@ -3,6 +3,7 @@ package com.shinecraft.server.booking;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -12,7 +13,10 @@ import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
+import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
+import com.shinecraft.server.loyalty.RewardRedemptionStatus;
+import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
@@ -31,6 +35,7 @@ class BookingServiceLayerTest {
     private VehicleRepository vehicleRepository;
     private CarWashServiceRepository serviceRepository;
     private LoyaltyService loyaltyService;
+    private PromotionService promotionService;
     private AuthService authService;
     private BookingServiceLayer bookingService;
     private User customer;
@@ -42,6 +47,7 @@ class BookingServiceLayerTest {
         vehicleRepository = mock(VehicleRepository.class);
         serviceRepository = mock(CarWashServiceRepository.class);
         loyaltyService = mock(LoyaltyService.class);
+        promotionService = mock(PromotionService.class);
         authService = mock(AuthService.class);
         bookingService = new BookingServiceLayer(
                 bookingRepository,
@@ -49,7 +55,7 @@ class BookingServiceLayerTest {
                 serviceRepository,
                 mock(RewardRedemptionRepository.class),
                 loyaltyService,
-                mock(PromotionService.class),
+                promotionService,
                 authService,
                 10000);
 
@@ -273,6 +279,63 @@ class BookingServiceLayerTest {
         assertInvalidTransition(BookingStatus.CANCELLED, BookingStatus.CONFIRMED);
     }
 
+    @Test
+    void cancellationRestoresPromotionUsageAndANonExpiredRewardRedemption() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        Promotion promotion = new Promotion();
+        promotion.setUsedCount(1);
+        RewardRedemption redemption = usedRedemption(LocalDateTime.now().plusDays(1));
+        booking.setPromotion(promotion);
+        booking.setRewardRedemption(redemption);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.CANCELLED);
+
+        verify(promotionService).restoreUsage(promotion);
+        assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.AVAILABLE);
+        assertThat(redemption.getUsedAt()).isNull();
+    }
+
+    @Test
+    void cancellationRejectsPromotionRestorationWhenUsageIsAlreadyZero() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        Promotion promotion = new Promotion();
+        promotion.setUsedCount(0);
+        booking.setPromotion(promotion);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        doThrow(new ApiException(org.springframework.http.HttpStatus.BAD_REQUEST, "Promotion usage cannot be restored"))
+                .when(promotionService)
+                .restoreUsage(promotion);
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Promotion usage cannot be restored");
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+    }
+
+    @Test
+    void cancellationExpiresAnExpiredRewardRedemption() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        RewardRedemption redemption = usedRedemption(LocalDateTime.now().minusSeconds(1));
+        booking.setRewardRedemption(redemption);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.CANCELLED);
+
+        assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.EXPIRED);
+        assertThat(redemption.getUsedAt()).isNotNull();
+    }
+
+    @Test
+    void cancellationWithoutPromotionOrRewardSucceeds() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.CANCELLED);
+
+        assertThat(response.status()).isEqualTo(BookingStatus.CANCELLED);
+    }
+
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt) {
         return new BookingDtos.CreateBookingRequest(1L, List.of(1L), scheduledAt, null, null, null);
     }
@@ -333,6 +396,14 @@ class BookingServiceLayerTest {
         booking.setDiscountAmount(BigDecimal.ZERO);
         booking.setFinalAmount(BigDecimal.valueOf(10000));
         return booking;
+    }
+
+    private RewardRedemption usedRedemption(LocalDateTime expiresAt) {
+        RewardRedemption redemption = new RewardRedemption();
+        redemption.setStatus(RewardRedemptionStatus.USED);
+        redemption.setUsedAt(LocalDateTime.now().minusMinutes(1));
+        redemption.setExpiresAt(expiresAt);
+        return redemption;
     }
 
     private void assertSlot(

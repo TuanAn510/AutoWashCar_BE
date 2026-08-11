@@ -213,6 +213,9 @@ public class BookingServiceLayer {
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
         validateStatusTransition(booking.getStatus(), status);
+        if (status == BookingStatus.CANCELLED) {
+            restoreCancellationResources(booking);
+        }
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
@@ -237,6 +240,21 @@ public class BookingServiceLayer {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
+        }
+    }
+
+    private void restoreCancellationResources(Booking booking) {
+        if (booking.getPromotion() != null) {
+            promotionService.restoreUsage(booking.getPromotion());
+        }
+        if (booking.getRewardRedemption() != null) {
+            RewardRedemption redemption = booking.getRewardRedemption();
+            if (redemption.getExpiresAt() != null && redemption.getExpiresAt().isBefore(LocalDateTime.now())) {
+                redemption.setStatus(RewardRedemptionStatus.EXPIRED);
+            } else {
+                redemption.setStatus(RewardRedemptionStatus.AVAILABLE);
+                redemption.setUsedAt(null);
+            }
         }
     }
 
