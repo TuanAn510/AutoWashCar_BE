@@ -37,9 +37,6 @@ public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
     private static final int SLOT_MINUTES = 30;
-    private static final List<BookingStatus> OCCUPIED_STATUSES =
-            List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
-
     private final BookingRepository bookingRepository;
     private final VehicleRepository vehicleRepository;
     private final CarWashServiceRepository serviceRepository;
@@ -162,7 +159,6 @@ public class BookingServiceLayer {
         Set<LocalDateTime> occupiedSlots = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
-                .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
                 .map(Booking::getScheduledAt)
                 .collect(Collectors.toSet());
 
@@ -237,7 +233,7 @@ public class BookingServiceLayer {
         if (!isAlignedSlot(scheduledAt.toLocalTime())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Booking slot must be between 08:00 and 17:00 and aligned to 30-minute intervals");
         }
-        if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
+        if (bookingRepository.existsByScheduledAt(scheduledAt)) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
         }
     }
