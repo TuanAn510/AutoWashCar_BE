@@ -9,7 +9,7 @@ public final class UserDtos {
 
     public record RegisterRequest(
             @NotBlank @Size(max = 120) String fullName,
-            @NotBlank @Pattern(regexp = "^[0-9]{9,15}$") String phone,
+            @NotBlank @Pattern(regexp = "^[+0-9\\s.-]{9,20}$") String phone,
             @NotBlank @Size(min = 8, max = 100) String password,
             @NotBlank @Size(max = 20) String licensePlate,
             @NotBlank @Size(max = 80) String brand,
@@ -18,7 +18,7 @@ public final class UserDtos {
             Integer manufactureYear) {}
 
     public record LoginRequest(
-            @NotBlank @Pattern(regexp = "^[0-9]{9,15}$") String phone,
+            @NotBlank @Pattern(regexp = "^[+0-9\\s.-]{9,20}$") String phone,
             @NotBlank String password) {}
 
     public record UserResponse(Long id, String fullName, String phone, UserRole role, boolean active) {

@@ -30,6 +30,7 @@ public class PromotionService {
         this.authService = authService;
     }
 
+    @Transactional(readOnly = true)
     public List<PromotionDtos.PromotionResponse> activeForCurrentCustomer() {
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(authService.currentUser());
         MembershipTier customerTier = account.getMembershipTier();
@@ -43,6 +44,7 @@ public class PromotionService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
     public List<PromotionDtos.PromotionResponse> all() {
         return promotionRepository.findAll().stream().map(PromotionDtos.PromotionResponse::from).toList();
     }
@@ -81,7 +83,7 @@ public class PromotionService {
     @Transactional
     public Promotion claimUsable(Long promotionId, LoyaltyAccount account) {
         Promotion promotion = promotionRepository
-                .findById(promotionId)
+                .findByIdForUpdate(promotionId)
                 .filter(Promotion::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion is not available"));
         LocalDateTime now = LocalDateTime.now();

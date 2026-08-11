@@ -1,12 +1,15 @@
 package com.shinecraft.server.user;
 
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.LicensePlateNormalizer;
+import com.shinecraft.server.common.PhoneNormalizer;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
 import com.shinecraft.server.security.JwtService;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
+import java.time.LocalDateTime;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -39,12 +42,12 @@ public class AuthService {
 
     @Transactional
     public UserDtos.AuthResponse register(UserDtos.RegisterRequest request) {
-        String phone = request.phone().trim();
-        String licensePlate = normalizePlate(request.licensePlate());
+        String phone = PhoneNormalizer.normalize(request.phone());
+        String licensePlate = LicensePlateNormalizer.normalize(request.licensePlate());
         if (userRepository.existsByPhone(phone)) {
             throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
         }
-        if (vehicleRepository.existsByLicensePlate(licensePlate)) {
+        if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(licensePlate)) {
             throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }
 
@@ -62,6 +65,7 @@ public class AuthService {
         vehicle.setModel(request.model().trim());
         vehicle.setColor(request.color());
         vehicle.setManufactureYear(request.manufactureYear());
+        vehicle.setOwnershipStartAt(LocalDateTime.now());
         vehicleRepository.save(vehicle);
 
         LoyaltyAccount account = new LoyaltyAccount();
@@ -76,7 +80,7 @@ public class AuthService {
 
     public UserDtos.AuthResponse login(UserDtos.LoginRequest request) {
         User user = userRepository
-                .findByPhone(request.phone().trim())
+                .findByPhone(PhoneNormalizer.normalize(request.phone()))
                 .filter(User::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid phone number or password"));
 
@@ -98,7 +102,4 @@ public class AuthService {
         return new UserDtos.AuthResponse(jwtService.generateToken(user), UserDtos.UserResponse.from(user));
     }
 
-    private String normalizePlate(String value) {
-        return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase();
-    }
 }

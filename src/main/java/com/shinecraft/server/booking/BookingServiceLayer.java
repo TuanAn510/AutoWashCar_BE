@@ -22,8 +22,11 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -39,6 +42,21 @@ public class BookingServiceLayer {
     private static final int SLOT_MINUTES = 30;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
+    private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS =
+            new EnumMap<>(BookingStatus.class);
+
+    static {
+        ALLOWED_STATUS_TRANSITIONS.put(
+                BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED));
+        ALLOWED_STATUS_TRANSITIONS.put(
+                BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED));
+        ALLOWED_STATUS_TRANSITIONS.put(
+                BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED));
+        ALLOWED_STATUS_TRANSITIONS.put(
+                BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED));
+        ALLOWED_STATUS_TRANSITIONS.put(BookingStatus.COMPLETED, Set.of());
+        ALLOWED_STATUS_TRANSITIONS.put(BookingStatus.CANCELLED, Set.of());
+    }
 
     private final BookingRepository bookingRepository;
     private final VehicleRepository vehicleRepository;
@@ -78,7 +96,7 @@ public class BookingServiceLayer {
         validateBookingWindow(request.scheduledAt(), account);
         validateBookableSlot(request.scheduledAt());
 
-        List<CarWashService> selectedServices = serviceRepository.findAllById(request.serviceIds());
+        List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(request.serviceIds()));
         if (selectedServices.size() != request.serviceIds().size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
@@ -99,12 +117,29 @@ public class BookingServiceLayer {
         }
 
         RewardRedemption redemption = null;
+        CarWashService freeAddOnService = null;
         if (request.rewardRedemptionId() != null) {
             redemption = redemptionRepository
                     .findByIdAndCustomerAndStatus(
                             request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
                     .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
-            discount = discount.add(discountForReward(subtotal.subtract(discount), redemption.getReward()));
+            LocalDateTime now = LocalDateTime.now();
+            if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(now)) {
+                loyaltyService.markRedemptionExpired(redemption.getId());
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
+            }
+            Reward reward = redemption.getReward();
+            if (reward.getRewardType() == RewardType.ADD_ON) {
+                CarWashService addOn = requireActiveAddOnService(reward);
+                boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
+                if (alreadySelected) {
+                    discount = discount.add(addOn.getPrice().min(subtotal.subtract(discount)));
+                } else {
+                    freeAddOnService = addOn;
+                }
+            } else {
+                discount = discount.add(discountForReward(subtotal.subtract(discount), reward));
+            }
             redemption.setStatus(RewardRedemptionStatus.USED);
             redemption.setUsedAt(LocalDateTime.now());
         }
@@ -125,14 +160,10 @@ public class BookingServiceLayer {
         booking.setPromotion(promotion);
         booking.setRewardRedemption(redemption);
         booking.setNote(request.note());
-        selectedServices.forEach(service -> {
-            BookingService item = new BookingService();
-            item.setService(service);
-            item.setServiceName(service.getName());
-            item.setPrice(service.getPrice());
-            item.setDurationMinutes(service.getDurationMinutes());
-            booking.addService(item);
-        });
+        selectedServices.forEach(service -> addBookingService(booking, service, service.getPrice()));
+        if (freeAddOnService != null) {
+            addBookingService(booking, freeAddOnService, BigDecimal.ZERO);
+        }
 
         return BookingDtos.BookingResponse.from(bookingRepository.save(booking));
     }
@@ -205,6 +236,7 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
+        validateStatusTransition(booking.getStatus(), status);
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
@@ -222,6 +254,18 @@ public class BookingServiceLayer {
             }
         }
         return BookingDtos.BookingResponse.from(booking);
+    }
+
+    private void validateStatusTransition(BookingStatus currentStatus, BookingStatus nextStatus) {
+        if (currentStatus == nextStatus) {
+            return;
+        }
+        Set<BookingStatus> allowedNextStatuses = ALLOWED_STATUS_TRANSITIONS.getOrDefault(currentStatus, Set.of());
+        if (!allowedNextStatuses.contains(nextStatus)) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Booking status cannot transition from " + currentStatus + " to " + nextStatus);
+        }
     }
 
     private void validateBookingWindow(LocalDateTime scheduledAt, LoyaltyAccount account) {
@@ -283,6 +327,23 @@ public class BookingServiceLayer {
             return reward.getDiscountAmount().min(base);
         }
         return BigDecimal.ZERO;
+    }
+
+    private CarWashService requireActiveAddOnService(Reward reward) {
+        CarWashService addOn = reward.getAddOnService();
+        if (addOn == null || !addOn.isActive()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward add-on service is not available");
+        }
+        return addOn;
+    }
+
+    private void addBookingService(Booking booking, CarWashService service, BigDecimal price) {
+        BookingService item = new BookingService();
+        item.setService(service);
+        item.setServiceName(service.getName());
+        item.setPrice(price);
+        item.setDurationMinutes(service.getDurationMinutes());
+        booking.addService(item);
     }
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {

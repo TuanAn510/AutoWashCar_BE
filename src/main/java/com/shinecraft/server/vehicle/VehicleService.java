@@ -1,8 +1,10 @@
 package com.shinecraft.server.vehicle;
 
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.LicensePlateNormalizer;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -27,8 +29,8 @@ public class VehicleService {
 
     @Transactional
     public VehicleDtos.VehicleResponse create(VehicleDtos.VehicleRequest request) {
-        String plate = normalizePlate(request.licensePlate());
-        if (vehicleRepository.existsByLicensePlate(plate)) {
+        String plate = LicensePlateNormalizer.normalize(request.licensePlate());
+        if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate)) {
             throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }
         Vehicle vehicle = new Vehicle();
@@ -38,10 +40,7 @@ public class VehicleService {
         vehicle.setModel(request.model().trim());
         vehicle.setColor(request.color());
         vehicle.setManufactureYear(request.manufactureYear());
+        vehicle.setOwnershipStartAt(LocalDateTime.now());
         return VehicleDtos.VehicleResponse.from(vehicleRepository.save(vehicle));
-    }
-
-    private String normalizePlate(String value) {
-        return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase();
     }
 }

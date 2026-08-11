@@ -20,7 +20,7 @@ public class ProjectReportController {
                                 "Architecture",
                                 List.of(
                                         "Spring Boot 4.1.0 with Java 17.",
-                                        "MySQL database managed by Flyway migration.",
+                                        "SQL Server database managed by Flyway migration.",
                                         "JWT authentication with customer/admin authorization.",
                                         "React frontend can integrate through REST APIs without changing backend contracts.")),
                         new ProjectReportDtos.ReportSection(
@@ -29,14 +29,19 @@ public class ProjectReportController {
                                         "Customer registration requires phone number and license plate.",
                                         "Login returns JWT token for protected APIs.",
                                         "Booking form can load catalog services and available slots.",
+                                        "Booking status updates follow a guarded lifecycle.",
+                                        "Admin user management supports search, account status, role changes, password reset, and audit logging.",
+                                        "Loyalty uses point lots for FIFO redemption and 12-month expiry.",
                                         "Survey event logs capture page view, click, form start, form submit, login, register, and booking created events.",
                                         "Health endpoint supports temporary hosting checks.")),
                         new ProjectReportDtos.ReportSection(
                                 "Database Constraints",
                                 List.of(
-                                        "All main tables use BIGINT AUTO_INCREMENT primary keys.",
-                                        "Phone and license plate are unique.",
-                                        "Booking scheduled_at is unique for the week 1-4 prototype.",
+                                        "All main tables use BIGINT IDENTITY(1,1) primary keys.",
+                                        "Phone numbers are unique after normalization.",
+                                        "Active license plates are unique; inactive vehicle history does not block reuse.",
+                                        "Active booking scheduled_at values are unique; cancelled bookings release their slots.",
+                                        "Point expiry is recorded through point lots and EXPIRE transactions without rewriting earn history.",
                                         "Foreign keys connect users, vehicles, bookings, services, loyalty, rewards, promotions, and survey logs.",
                                         "Check constraints validate role, status, enum values, points, prices, durations, and promotion date range.")),
                         new ProjectReportDtos.ReportSection(
