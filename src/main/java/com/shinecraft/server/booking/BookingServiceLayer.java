@@ -79,6 +79,9 @@ public class BookingServiceLayer {
         if (selectedServices.size() != request.serviceIds().size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
+        int requiredSlots = slotsForDuration(totalDuration(selectedServices));
+        validateBookingEndTime(request.scheduledAt(), requiredSlots);
+        validateNoOverlappingBooking(request.scheduledAt(), requiredSlots);
 
         BigDecimal subtotal = selectedServices.stream()
                 .map(CarWashService::getPrice)
@@ -159,7 +162,7 @@ public class BookingServiceLayer {
         Set<LocalDateTime> occupiedSlots = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
-                .map(Booking::getScheduledAt)
+                .flatMap(this::occupiedSlots)
                 .collect(Collectors.toSet());
 
         List<BookingDtos.SlotResponse> slots = Stream.iterate(date.atTime(OPEN_TIME), time -> time.plusMinutes(SLOT_MINUTES))
@@ -250,6 +253,54 @@ public class BookingServiceLayer {
             return "BOOKED";
         }
         return null;
+    }
+
+    private void validateBookingEndTime(LocalDateTime scheduledAt, int requiredSlots) {
+        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+        if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking duration must end by 17:00");
+        }
+    }
+
+    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots) {
+        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+        boolean overlaps = bookingRepository
+                .findByScheduledAtBetweenOrderByScheduledAtAsc(
+                        scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
+                .stream()
+                .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
+        if (overlaps) {
+            throw new ApiException(HttpStatus.CONFLICT, "This booking slot overlaps an existing booking");
+        }
+    }
+
+    private Stream<LocalDateTime> occupiedSlots(Booking booking) {
+        return Stream.iterate(booking.getScheduledAt(), slot -> slot.plusMinutes(SLOT_MINUTES))
+                .limit(slotsForDuration(totalDuration(booking)));
+    }
+
+    private boolean overlaps(LocalDateTime startAt, LocalDateTime endAt, LocalDateTime existingStartAt, LocalDateTime existingEndAt) {
+        return startAt.isBefore(existingEndAt) && existingStartAt.isBefore(endAt);
+    }
+
+    private LocalDateTime endAt(LocalDateTime startAt, int requiredSlots) {
+        return startAt.plusMinutes((long) requiredSlots * SLOT_MINUTES);
+    }
+
+    private int slotsForDuration(int durationMinutes) {
+        return Math.max(1, (durationMinutes + SLOT_MINUTES - 1) / SLOT_MINUTES);
+    }
+
+    private int totalDuration(List<CarWashService> services) {
+        return services.stream().mapToInt(CarWashService::getDurationMinutes).sum();
+    }
+
+    private int totalDuration(Booking booking) {
+        return booking.getServices().stream().mapToInt(BookingService::getDurationMinutes).sum();
+    }
+
+    private LocalDateTime endAt(Booking booking) {
+        return endAt(booking.getScheduledAt(), slotsForDuration(totalDuration(booking)));
     }
 
     private boolean isAlignedSlot(LocalTime time) {
