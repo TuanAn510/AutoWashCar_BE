@@ -119,6 +119,8 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.token", notNullValue()))
+                .andExpect(jsonPath("$.data.refreshToken", notNullValue()))
+                .andExpect(jsonPath("$.data.tokenType", is("Bearer")))
                 .andExpect(jsonPath("$.data.user.phone", is(customer.phone())));
 
         mockMvc.perform(get("/api/auth/me").header("Authorization", bearer(customer.token())))
@@ -126,6 +128,67 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.phone", is(customer.phone())))
                 .andExpect(jsonPath("$.data.role", is("ROLE_CUSTOMER")));
+    }
+
+    @Test
+    void refreshTokenRotatesAndOldTokenCannotBeReused() throws Exception {
+        CustomerContext customer = registerCustomer();
+
+        MvcResult refreshResult = mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "refreshToken": "%s"
+                                }
+                                """
+                                .formatted(customer.refreshToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.token", notNullValue()))
+                .andExpect(jsonPath("$.data.refreshToken", notNullValue()))
+                .andExpect(jsonPath("$.data.user.phone", is(customer.phone())))
+                .andReturn();
+
+        String rotatedRefreshToken =
+                JsonPath.read(refreshResult.getResponse().getContentAsString(), "$.data.refreshToken");
+        assertThat(rotatedRefreshToken).isNotEqualTo(customer.refreshToken());
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "refreshToken": "%s"
+                                }
+                                """
+                                .formatted(customer.refreshToken())))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success", is(false)));
+    }
+
+    @Test
+    void logoutRevokesRefreshToken() throws Exception {
+        CustomerContext customer = registerCustomer();
+
+        mockMvc.perform(post("/api/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "refreshToken": "%s"
+                                }
+                                """
+                                .formatted(customer.refreshToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)));
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "refreshToken": "%s"
+                                }
+                                """
+                                .formatted(customer.refreshToken())))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success", is(false)));
     }
 
     @Test
@@ -519,9 +582,11 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.token", notNullValue()))
+                .andExpect(jsonPath("$.data.refreshToken", notNullValue()))
                 .andReturn();
 
         String token = JsonPath.read(result.getResponse().getContentAsString(), "$.data.token");
+        String refreshToken = JsonPath.read(result.getResponse().getContentAsString(), "$.data.refreshToken");
         User user = userRepository
                 .findByPhone(phone)
                 .orElseThrow(() -> new AssertionError("Registered customer should be persisted"));
@@ -530,7 +595,7 @@ class ApplicationFlowIntegrationTests {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Registered customer should have a vehicle"));
-        return new CustomerContext(phone, token, user, vehicle);
+        return new CustomerContext(phone, token, refreshToken, user, vehicle);
     }
 
     private String loginAdmin() throws Exception {
@@ -654,5 +719,5 @@ class ApplicationFlowIntegrationTests {
         }
     }
 
-    private record CustomerContext(String phone, String token, User user, Vehicle vehicle) {}
+    private record CustomerContext(String phone, String token, String refreshToken, User user, Vehicle vehicle) {}
 }

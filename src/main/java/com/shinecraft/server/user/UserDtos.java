@@ -21,11 +21,15 @@ public final class UserDtos {
             @NotBlank @Pattern(regexp = "^[+0-9\\s.-]{9,20}$") String phone,
             @NotBlank String password) {}
 
+    public record RefreshTokenRequest(@NotBlank String refreshToken) {}
+
+    public record LogoutRequest(@NotBlank String refreshToken) {}
+
     public record UserResponse(Long id, String fullName, String phone, UserRole role, boolean active) {
         public static UserResponse from(User user) {
             return new UserResponse(user.getId(), user.getFullName(), user.getPhone(), user.getRole(), user.isActive());
         }
     }
 
-    public record AuthResponse(String token, UserResponse user) {}
+    public record AuthResponse(String token, String refreshToken, String tokenType, UserResponse user) {}
 }

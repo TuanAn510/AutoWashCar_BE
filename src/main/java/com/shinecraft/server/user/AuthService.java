@@ -24,6 +24,7 @@ public class AuthService {
     private final MembershipTierRepository membershipTierRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthService(
             UserRepository userRepository,
@@ -31,13 +32,15 @@ public class AuthService {
             LoyaltyAccountRepository loyaltyAccountRepository,
             MembershipTierRepository membershipTierRepository,
             PasswordEncoder passwordEncoder,
-            JwtService jwtService) {
+            JwtService jwtService,
+            RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.vehicleRepository = vehicleRepository;
         this.loyaltyAccountRepository = loyaltyAccountRepository;
         this.membershipTierRepository = membershipTierRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @Transactional
@@ -91,6 +94,15 @@ public class AuthService {
         return authResponse(user);
     }
 
+    public UserDtos.AuthResponse refresh(UserDtos.RefreshTokenRequest request) {
+        RefreshTokenService.RotatedRefreshToken rotatedToken = refreshTokenService.rotate(request.refreshToken());
+        return authResponse(rotatedToken.user(), rotatedToken.refreshToken());
+    }
+
+    public void logout(UserDtos.LogoutRequest request) {
+        refreshTokenService.revoke(request.refreshToken());
+    }
+
     public User currentUser() {
         String phone = SecurityContextHolder.getContext().getAuthentication().getName();
         return userRepository
@@ -99,7 +111,12 @@ public class AuthService {
     }
 
     private UserDtos.AuthResponse authResponse(User user) {
-        return new UserDtos.AuthResponse(jwtService.generateToken(user), UserDtos.UserResponse.from(user));
+        return authResponse(user, refreshTokenService.create(user));
+    }
+
+    private UserDtos.AuthResponse authResponse(User user, String refreshToken) {
+        return new UserDtos.AuthResponse(
+                jwtService.generateToken(user), refreshToken, "Bearer", UserDtos.UserResponse.from(user));
     }
 
 }

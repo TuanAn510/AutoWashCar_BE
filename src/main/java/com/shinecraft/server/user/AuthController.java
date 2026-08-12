@@ -29,6 +29,17 @@ public class AuthController {
         return ApiResponse.ok("Login successful", authService.login(request));
     }
 
+    @PostMapping("/refresh")
+    ApiResponse<UserDtos.AuthResponse> refresh(@Valid @RequestBody UserDtos.RefreshTokenRequest request) {
+        return ApiResponse.ok("Token refreshed successfully", authService.refresh(request));
+    }
+
+    @PostMapping("/logout")
+    ApiResponse<Void> logout(@Valid @RequestBody UserDtos.LogoutRequest request) {
+        authService.logout(request);
+        return ApiResponse.ok("Logout successful", null);
+    }
+
     @GetMapping("/me")
     ApiResponse<UserDtos.UserResponse> me() {
         return ApiResponse.ok("Current user retrieved successfully", UserDtos.UserResponse.from(authService.currentUser()));

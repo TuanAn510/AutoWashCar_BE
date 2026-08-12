@@ -56,6 +56,37 @@ Public endpoint used to verify that the temporarily hosted backend is running.
 }
 ```
 
+Successful register/login responses include an access token and a refresh token:
+
+```json
+{
+  "token": "jwt-access-token",
+  "refreshToken": "refresh-token",
+  "tokenType": "Bearer",
+  "user": {}
+}
+```
+
+`POST /api/auth/refresh`
+
+Rotates a valid refresh token and returns a new access token plus a new refresh token. The previous refresh token is revoked.
+
+```json
+{
+  "refreshToken": "existing-refresh-token"
+}
+```
+
+`POST /api/auth/logout`
+
+Revokes the provided refresh token.
+
+```json
+{
+  "refreshToken": "refresh-token-to-revoke"
+}
+```
+
 `GET /api/auth/me`
 
 Requires a valid JWT.
