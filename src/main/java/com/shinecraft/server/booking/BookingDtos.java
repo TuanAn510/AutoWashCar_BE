@@ -1,6 +1,7 @@
 package com.shinecraft.server.booking;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shinecraft.server.user.UserRole;
 import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -19,6 +20,16 @@ public final class BookingDtos {
             Long promotionId,
             Long rewardRedemptionId,
             @Size(max = 1000) String note) {
+        public CreateBookingRequest(
+                Long vehicleId,
+                List<Long> serviceIds,
+                LocalDateTime scheduledAt,
+                Long promotionId,
+                Long rewardRedemptionId,
+                String note) {
+            this(vehicleId, serviceIds, null, scheduledAt, promotionId, rewardRedemptionId, note);
+        }
+
         public List<Long> resolvedServiceIds() {
             if (serviceIds != null && !serviceIds.isEmpty()) {
                 return serviceIds;
@@ -32,9 +43,17 @@ public final class BookingDtos {
 
     public record ServiceRef(@NotNull Long serviceId) {}
 
-    public record UpdateStatusRequest(String status) {
+    public record UpdateStatusRequest(@JsonProperty("status") String statusValue) {
+        public UpdateStatusRequest(BookingStatus status) {
+            this(status == null ? null : status.name());
+        }
+
+        public BookingStatus status() {
+            return resolvedStatus();
+        }
+
         public BookingStatus resolvedStatus() {
-            return BookingStatus.valueOf(status.trim().toUpperCase());
+            return BookingStatus.valueOf(statusValue.trim().toUpperCase());
         }
     }
 
@@ -91,7 +110,11 @@ public final class BookingDtos {
             String tierName,
             Integer priorityLevel,
             BookingStatus status,
-            BigDecimal finalAmount) {}
+            BigDecimal finalAmount,
+            LocalDateTime checkInAt,
+            Long waitingMinutes,
+            Integer serviceDurationMinutes,
+            Integer position) {}
 
     public record AppointmentUser(
             @JsonProperty("_id") String uid,
@@ -144,7 +167,7 @@ public final class BookingDtos {
                             String.valueOf(booking.getCustomer().getId()),
                             booking.getCustomer().getFullName(),
                             booking.getCustomer().getPhone(),
-                            com.shinecraft.server.user.UserDtos.toFrontendRole(booking.getCustomer().getRole())),
+                            toFrontendRole(booking.getCustomer().getRole())),
                     new AppointmentVehicle(
                             String.valueOf(booking.getVehicle().getId()),
                             booking.getVehicle().getBrand(),
@@ -210,6 +233,14 @@ public final class BookingDtos {
             case IN_PROGRESS -> "in_progress";
             case COMPLETED -> "completed";
             case CANCELLED -> "cancelled";
+        };
+    }
+
+    private static String toFrontendRole(UserRole role) {
+        return switch (role) {
+            case ROLE_ADMIN -> "admin";
+            case ROLE_STAFF -> "staff";
+            case ROLE_CUSTOMER -> "customer";
         };
     }
 }

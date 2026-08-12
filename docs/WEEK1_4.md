@@ -4,10 +4,9 @@ Week 1-4 objective: build the Spring Boot foundation, prepare integration points
 
 ## Backend Completed
 
-- Spring Boot + SQL Server + Flyway.
+- Spring Boot + MySQL + Flyway.
 - JWT authentication for customer/admin.
-- Customer registration with normalized phone + license plate.
-- Admin user management for search, account status, role changes, and password reset.
+- Customer registration with phone + license plate.
 - Login returns a JWT token.
 - Public catalog services for the booking form.
 - Booking form APIs:
@@ -26,13 +25,10 @@ Week 1-4 objective: build the Spring Boot foundation, prepare integration points
 
 ## Important Database Constraints
 
-- All tables use `id BIGINT IDENTITY(1,1)` as the primary key.
+- All tables use `id BIGINT AUTO_INCREMENT` as the primary key.
 - User phone is unique.
-- Vehicle license plate is unique for active vehicles.
-- Booking `scheduled_at` is unique only for active bookings; a cancelled booking releases the slot for rebooking.
-- Loyalty points are tracked through point lots, preserving original earn history while supporting FIFO redemption and expiry.
-- Monthly loyalty review can upgrade or downgrade tiers based on the review window.
-- User-management changes are captured in `audit_logs`.
+- Vehicle license plate is unique.
+- Booking `scheduled_at` is unique for the week 1-4 one-slot-one-booking prototype.
 - Foreign keys connect users, vehicles, bookings, services, loyalty, promotions, rewards, and survey logs.
 - Check constraints cover:
   - customer/admin roles
@@ -59,11 +55,11 @@ Week 1-4 objective: build the Spring Boot foundation, prepare integration points
 Required environment variables:
 
 ```powershell
-$env:DB_URL="jdbc:sqlserver://localhost:1433;databaseName=wash_car_service;encrypt=false;trustServerCertificate=true"
-$env:DB_USERNAME="sa"
-$env:DB_PASSWORD="your_sql_server_password"
+$env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
+$env:DB_USERNAME="root"
+$env:DB_PASSWORD="your_mysql_password"
 $env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
-$env:CORS_ALLOWED_ORIGINS="http://localhost:3000,https://your-temporary-frontend.example"
+$env:CORS_ALLOWED_ORIGINS="http://localhost:5173,https://your-temporary-frontend.example"
 ```
 
 Run with Maven Wrapper:
@@ -76,5 +72,5 @@ Or build with Docker:
 
 ```powershell
 docker build -t wash-car-service-server .
-docker run -p 8080:8080 --env DB_URL="jdbc:sqlserver://host.docker.internal:1433;databaseName=wash_car_service;encrypt=false;trustServerCertificate=true" --env DB_USERNAME=sa --env DB_PASSWORD=your_sql_server_password --env JWT_SECRET=change-this-to-a-long-secret-at-least-32-bytes wash-car-service-server
+docker run -p 8080:8080 --env DB_URL="jdbc:mysql://host.docker.internal:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh" --env DB_USERNAME=root --env DB_PASSWORD=your_mysql_password --env JWT_SECRET=change-this-to-a-long-secret-at-least-32-bytes wash-car-service-server
 ```

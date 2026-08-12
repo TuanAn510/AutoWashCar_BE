@@ -11,7 +11,7 @@ This repository is written and documented in English.
 - Spring Web MVC
 - Spring Security + JWT
 - Spring Data JPA
-- SQL Server
+- MySQL
 - Flyway database migration
 - springdoc-openapi Swagger UI
 - Maven Wrapper
@@ -22,7 +22,7 @@ The current implementation prioritizes the week 1-4 project milestone:
 
 - Build the Spring Boot backend foundation.
 - Prepare APIs for React registration, login, and booking forms.
-- Use local SQL Server as the main database.
+- Use local MySQL as the main database.
 - Provide Swagger UI for API presentation.
 - Provide a report page for project demonstration.
 - Support temporary hosting so users can simulate bookings and generate survey logs.
@@ -32,19 +32,18 @@ The frontend is intentionally not modified in this backend workspace.
 ## Roles
 
 - `ROLE_CUSTOMER`: registers, logs in, manages vehicles, checks available slots, creates bookings, views loyalty data, redeems rewards, and sees eligible promotions.
-- `ROLE_ADMIN`: manages catalog data, membership tiers, rewards, promotions, booking status, users, survey logs, reports, and dashboard metrics.
+- `ROLE_ADMIN`: manages catalog data, membership tiers, rewards, promotions, booking status, survey logs, reports, and dashboard metrics.
 
 ## Local Setup
 
-1. Prepare a local SQL Server instance and ensure the `wash_car_service` database is available.
+1. Create a local MySQL database, or let the application create it through the JDBC option `createDatabaseIfNotExist=true`.
 2. Configure environment variables if your local values differ from the defaults:
 
 ```powershell
-$env:DB_URL="jdbc:sqlserver://localhost:1433;databaseName=wash_car_service;encrypt=false;trustServerCertificate=true"
 $env:DB_URL="jdbc:mysql://localhost:3306/wash_car_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh"
-$env:DB_USERNAME="sa"
-$env:DB_PASSWORD="sa"
-$env:JWT_SECRET="changit diffge-this-to-a-long-secret-at-least-32-bytes"
+$env:DB_USERNAME="root"
+$env:DB_PASSWORD="your_mysql_password"
+$env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
 ```
 
 3. Start the backend:
@@ -96,14 +95,13 @@ Bearer <token>
 
 ## Main Modules
 
-- Auth: customer registration, admin/customer login, JWT authentication, refresh token rotation/revocation, current user profile.
+- Auth: customer registration, admin/customer login, JWT authentication, current user profile.
 - Vehicle: customer-owned vehicle management.
 - Catalog: service categories and car wash services.
-- Booking: slot availability, booking creation, booking history, and a guarded status lifecycle.
-- Loyalty: point balance, point-lot expiry, earned/redeemed/expired transactions, monthly tier review, and automatic upgrade/downgrade.
-- Rewards: point redemption for vouchers, free wash, or free add-on services.
+- Booking: slot availability, booking creation, booking history, status lifecycle.
+- Loyalty: point balance, earned/redeemed/expired transactions, automatic tier updates.
+- Rewards: point redemption for vouchers, free wash, or add-on rewards.
 - Promotions: tier-targeted discounts with active dates and usage limits.
-- Admin Users: search users by phone/name/license plate, activate/deactivate users, change roles, and reset passwords with audit logs.
 - Survey Logs: public event logging for temporary survey/testing sessions.
 - Reports: admin dashboard metrics and booking CSV export.
 - Project Report: static HTML and JSON report endpoints for presentation.
@@ -119,19 +117,15 @@ src/main/resources/db/migration/V1__init_schema.sql
 Main tables:
 
 - `users`
-- `refresh_tokens`
 - `vehicles`
 - `service_categories`
 - `services`
 - `membership_tiers`
 - `loyalty_accounts`
-- `point_lots`
 - `loyalty_transactions`
-- `loyalty_monthly_snapshots`
 - `promotions`
 - `rewards`
 - `reward_redemptions`
-- `audit_logs`
 - `bookings`
 - `booking_services`
 - `survey_event_logs`
@@ -140,9 +134,8 @@ Important constraints:
 
 - Primary keys are defined on all tables.
 - User phone numbers are unique.
-- Active vehicle license plates are unique; inactive historical vehicles no longer block future ownership.
-- Active booking slots are unique; a slot can be booked again after the previous booking is cancelled.
-- Loyalty point expiry is ledger-based: original earn transactions remain unchanged and expiry is recorded as a separate negative transaction.
+- Vehicle license plates are unique.
+- Booking slots are unique in the week 1-4 prototype.
 - Foreign keys connect users, vehicles, bookings, services, loyalty, promotions, rewards, and survey logs.
 - Check constraints protect roles, statuses, enum values, price values, point values, durations, and promotion date ranges.
 
@@ -151,7 +144,7 @@ Important constraints:
 | Requirement | Status |
 |---|---|
 | Spring Boot backend | Implemented |
-| Local SQL Server database | Implemented |
+| Local MySQL database | Implemented |
 | Two main roles: customer and admin | Implemented |
 | Customer registration and login | Implemented |
 | Booking form API support | Implemented |

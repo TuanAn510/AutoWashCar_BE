@@ -19,20 +19,22 @@ import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -42,22 +44,13 @@ public class BookingServiceLayer {
     private static final int SLOT_MINUTES = 30;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
-    private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS =
-            new EnumMap<>(BookingStatus.class);
-
-    static {
-        ALLOWED_STATUS_TRANSITIONS.put(
-                BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED));
-        ALLOWED_STATUS_TRANSITIONS.put(
-                BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED));
-        ALLOWED_STATUS_TRANSITIONS.put(
-                BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED));
-        ALLOWED_STATUS_TRANSITIONS.put(
-                BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED));
-        ALLOWED_STATUS_TRANSITIONS.put(BookingStatus.COMPLETED, Set.of());
-        ALLOWED_STATUS_TRANSITIONS.put(BookingStatus.CANCELLED, Set.of());
-    }
-
+    private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
+            BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
+            BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
+            BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
+            BookingStatus.COMPLETED, Set.of(),
+            BookingStatus.CANCELLED, Set.of());
     private final BookingRepository bookingRepository;
     private final VehicleRepository vehicleRepository;
     private final CarWashServiceRepository serviceRepository;
@@ -86,7 +79,7 @@ public class BookingServiceLayer {
         this.pointsAmountUnit = pointsAmountUnit;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public BookingDtos.BookingResponse create(BookingDtos.CreateBookingRequest request) {
         User customer = authService.currentUser();
         Vehicle vehicle = vehicleRepository
@@ -105,6 +98,35 @@ public class BookingServiceLayer {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
 
+        RewardRedemption redemption = null;
+        CarWashService freeAddOnService = null;
+        if (request.rewardRedemptionId() != null) {
+            redemption = redemptionRepository
+                    .findByIdAndCustomerAndStatus(
+                            request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
+            if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(LocalDateTime.now())) {
+                loyaltyService.markRedemptionExpired(redemption.getId());
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
+            }
+            Reward reward = redemption.getReward();
+            if (reward.getRewardType() == RewardType.ADD_ON) {
+                CarWashService addOn = requireActiveAddOnService(reward);
+                boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
+                if (!alreadySelected) {
+                    freeAddOnService = addOn;
+                }
+            }
+        }
+
+        List<CarWashService> bookedServices = new ArrayList<>(selectedServices);
+        if (freeAddOnService != null) {
+            bookedServices.add(freeAddOnService);
+        }
+        int requiredSlots = slotsForDuration(totalDuration(bookedServices));
+        validateBookingEndTime(request.scheduledAt(), requiredSlots);
+        validateNoOverlappingBooking(request.scheduledAt(), requiredSlots);
+
         BigDecimal subtotal = selectedServices.stream()
                 .map(CarWashService::getPrice)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -120,26 +142,13 @@ public class BookingServiceLayer {
             discount = discount.add(discountForPromotion(subtotal.subtract(discount), promotion));
         }
 
-        RewardRedemption redemption = null;
-        CarWashService freeAddOnService = null;
-        if (request.rewardRedemptionId() != null) {
-            redemption = redemptionRepository
-                    .findByIdAndCustomerAndStatus(
-                            request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
-                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
-            LocalDateTime now = LocalDateTime.now();
-            if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(now)) {
-                loyaltyService.markRedemptionExpired(redemption.getId());
-                throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
-            }
+        if (redemption != null) {
             Reward reward = redemption.getReward();
             if (reward.getRewardType() == RewardType.ADD_ON) {
                 CarWashService addOn = requireActiveAddOnService(reward);
                 boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
                 if (alreadySelected) {
                     discount = discount.add(addOn.getPrice().min(subtotal.subtract(discount)));
-                } else {
-                    freeAddOnService = addOn;
                 }
             } else {
                 discount = discount.add(discountForReward(subtotal.subtract(discount), reward));
@@ -172,7 +181,7 @@ public class BookingServiceLayer {
         return BookingDtos.BookingResponse.from(bookingRepository.save(booking));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public BookingDtos.AppointmentResponse createAppointment(BookingDtos.CreateBookingRequest request) {
         BookingDtos.BookingResponse created = create(request);
         return appointmentDetail(created.id());
@@ -227,7 +236,7 @@ public class BookingServiceLayer {
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
                 .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
-                .map(Booking::getScheduledAt)
+                .flatMap(this::occupiedSlots)
                 .collect(Collectors.toSet());
 
         List<BookingDtos.SlotResponse> slots = Stream.iterate(date.atTime(OPEN_TIME), time -> time.plusMinutes(SLOT_MINUTES))
@@ -242,26 +251,26 @@ public class BookingServiceLayer {
 
     @Transactional(readOnly = true)
     public List<BookingDtos.QueueItemResponse> priorityQueue() {
-        List<BookingStatus> statuses = List.of(BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
-        return bookingRepository.findByStatusInOrderByScheduledAtAsc(statuses).stream()
-                .map(booking -> {
-                    LoyaltyAccount account = loyaltyService.getOrCreateAccount(booking.getCustomer());
-                    Integer priority = account.getMembershipTier() == null ? 0 : account.getMembershipTier().getPriorityLevel();
-                    String tierName = account.getMembershipTier() == null ? "Member" : account.getMembershipTier().getName();
-                    return new BookingDtos.QueueItemResponse(
-                            booking.getId(),
-                            booking.getScheduledAt(),
-                            booking.getCustomer().getFullName(),
-                            booking.getVehicle().getLicensePlate(),
-                            tierName,
-                            priority,
-                            booking.getStatus(),
-                            booking.getFinalAmount());
-                })
-                .sorted(Comparator.comparing(BookingDtos.QueueItemResponse::priorityLevel)
-                        .reversed()
-                        .thenComparing(BookingDtos.QueueItemResponse::scheduledAt))
+        LocalDateTime now = LocalDateTime.now();
+        List<Booking> bookings = bookingRepository.findByStatusInOrderByScheduledAtAsc(
+                List.of(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS));
+
+        List<BookingDtos.QueueItemResponse> inProgress = bookings.stream()
+                .filter(booking -> booking.getStatus() == BookingStatus.IN_PROGRESS)
+                .map(booking -> queueItem(booking, now, null))
+                .sorted(Comparator.comparing(BookingDtos.QueueItemResponse::bookingId))
                 .toList();
+
+        List<BookingDtos.QueueItemResponse> waiting = bookings.stream()
+                .filter(booking -> booking.getStatus() == BookingStatus.IN_QUEUE)
+                .map(booking -> queueItem(booking, now, null))
+                .sorted(waitingQueueComparator())
+                .toList();
+
+        List<BookingDtos.QueueItemResponse> positionedWaiting = IntStream.range(0, waiting.size())
+                .mapToObj(index -> withPosition(waiting.get(index), index + 1))
+                .toList();
+        return Stream.concat(inProgress.stream(), positionedWaiting.stream()).toList();
     }
 
     @Transactional
@@ -269,7 +278,14 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
-        validateStatusTransition(booking.getStatus(), status);
+        BookingStatus currentStatus = booking.getStatus();
+        validateStatusTransition(currentStatus, status);
+        if (currentStatus == BookingStatus.CONFIRMED && status == BookingStatus.IN_QUEUE && booking.getCheckInAt() == null) {
+            booking.setCheckInAt(LocalDateTime.now());
+        }
+        if (status == BookingStatus.CANCELLED) {
+            restoreCancellationResources(booking);
+        }
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
@@ -295,16 +311,75 @@ public class BookingServiceLayer {
         return appointmentDetail(bookingId);
     }
 
-    private void validateStatusTransition(BookingStatus currentStatus, BookingStatus nextStatus) {
-        if (currentStatus == nextStatus) {
-            return;
-        }
-        Set<BookingStatus> allowedNextStatuses = ALLOWED_STATUS_TRANSITIONS.getOrDefault(currentStatus, Set.of());
-        if (!allowedNextStatuses.contains(nextStatus)) {
+    private void validateStatusTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
+        if (!ALLOWED_STATUS_TRANSITIONS.getOrDefault(currentStatus, Set.of()).contains(requestedStatus)) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
-                    "Booking status cannot transition from " + currentStatus + " to " + nextStatus);
+                    "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
         }
+    }
+
+    private void restoreCancellationResources(Booking booking) {
+        if (booking.getPromotion() != null) {
+            promotionService.restoreUsage(booking.getPromotion());
+        }
+        if (booking.getRewardRedemption() != null) {
+            RewardRedemption redemption = booking.getRewardRedemption();
+            if (redemption.getExpiresAt() != null && redemption.getExpiresAt().isBefore(LocalDateTime.now())) {
+                redemption.setStatus(RewardRedemptionStatus.EXPIRED);
+            } else {
+                redemption.setStatus(RewardRedemptionStatus.AVAILABLE);
+                redemption.setUsedAt(null);
+            }
+        }
+    }
+
+    private BookingDtos.QueueItemResponse queueItem(Booking booking, LocalDateTime now, Integer position) {
+        LoyaltyAccount account = loyaltyService.getOrCreateAccount(booking.getCustomer());
+        Integer priority = account.getMembershipTier() == null ? 0 : account.getMembershipTier().getPriorityLevel();
+        String tierName = account.getMembershipTier() == null ? "Member" : account.getMembershipTier().getName();
+        LocalDateTime checkInAt = booking.getCheckInAt();
+        Long waitingMinutes = booking.getStatus() == BookingStatus.IN_QUEUE && checkInAt != null
+                ? Duration.between(checkInAt, now).toMinutes()
+                : null;
+        return new BookingDtos.QueueItemResponse(
+                booking.getId(),
+                booking.getScheduledAt(),
+                booking.getCustomer().getFullName(),
+                booking.getVehicle().getLicensePlate(),
+                tierName,
+                priority,
+                booking.getStatus(),
+                booking.getFinalAmount(),
+                checkInAt,
+                waitingMinutes,
+                totalDuration(booking),
+                position);
+    }
+
+    private Comparator<BookingDtos.QueueItemResponse> waitingQueueComparator() {
+        return Comparator.comparing(BookingDtos.QueueItemResponse::priorityLevel, Comparator.reverseOrder())
+                .thenComparing(item -> item.checkInAt() == null)
+                .thenComparing(
+                        BookingDtos.QueueItemResponse::checkInAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(BookingDtos.QueueItemResponse::serviceDurationMinutes)
+                .thenComparing(BookingDtos.QueueItemResponse::bookingId);
+    }
+
+    private BookingDtos.QueueItemResponse withPosition(BookingDtos.QueueItemResponse item, int position) {
+        return new BookingDtos.QueueItemResponse(
+                item.bookingId(),
+                item.scheduledAt(),
+                item.customerName(),
+                item.licensePlate(),
+                item.tierName(),
+                item.priorityLevel(),
+                item.status(),
+                item.finalAmount(),
+                item.checkInAt(),
+                item.waitingMinutes(),
+                item.serviceDurationMinutes(),
+                position);
     }
 
     private void validateBookingWindow(LocalDateTime scheduledAt, LoyaltyAccount account) {
@@ -337,6 +412,55 @@ public class BookingServiceLayer {
             return "BOOKED";
         }
         return null;
+    }
+
+    private void validateBookingEndTime(LocalDateTime scheduledAt, int requiredSlots) {
+        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+        if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking duration must end by 17:00");
+        }
+    }
+
+    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots) {
+        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+        boolean overlaps = bookingRepository
+                .findByScheduledAtBetweenOrderByScheduledAtAsc(
+                        scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
+                .stream()
+                .filter(existing -> OCCUPIED_STATUSES.contains(existing.getStatus()))
+                .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
+        if (overlaps) {
+            throw new ApiException(HttpStatus.CONFLICT, "This booking slot overlaps an existing booking");
+        }
+    }
+
+    private Stream<LocalDateTime> occupiedSlots(Booking booking) {
+        return Stream.iterate(booking.getScheduledAt(), slot -> slot.plusMinutes(SLOT_MINUTES))
+                .limit(slotsForDuration(totalDuration(booking)));
+    }
+
+    private boolean overlaps(LocalDateTime startAt, LocalDateTime endAt, LocalDateTime existingStartAt, LocalDateTime existingEndAt) {
+        return startAt.isBefore(existingEndAt) && existingStartAt.isBefore(endAt);
+    }
+
+    private LocalDateTime endAt(LocalDateTime startAt, int requiredSlots) {
+        return startAt.plusMinutes((long) requiredSlots * SLOT_MINUTES);
+    }
+
+    private int slotsForDuration(int durationMinutes) {
+        return Math.max(1, (durationMinutes + SLOT_MINUTES - 1) / SLOT_MINUTES);
+    }
+
+    private int totalDuration(List<CarWashService> services) {
+        return services.stream().mapToInt(CarWashService::getDurationMinutes).sum();
+    }
+
+    private int totalDuration(Booking booking) {
+        return booking.getServices().stream().mapToInt(BookingService::getDurationMinutes).sum();
+    }
+
+    private LocalDateTime endAt(Booking booking) {
+        return endAt(booking.getScheduledAt(), slotsForDuration(totalDuration(booking)));
     }
 
     private boolean isAlignedSlot(LocalTime time) {

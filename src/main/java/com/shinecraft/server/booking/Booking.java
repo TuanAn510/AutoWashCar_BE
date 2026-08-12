@@ -47,6 +47,9 @@ public class Booking extends BaseEntity {
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
 
+    @Column(name = "check_in_at")
+    private LocalDateTime checkInAt;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private BookingStatus status = BookingStatus.PENDING;
