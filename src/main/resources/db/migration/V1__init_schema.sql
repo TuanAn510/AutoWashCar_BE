@@ -1,9 +1,3 @@
-CREATE DATABASE wash_car_service;
-GO
-
-USE wash_car_service;
-GO
-
 CREATE TABLE users (
                        id BIGINT IDENTITY(1,1) PRIMARY KEY,
                        full_name VARCHAR(120) NOT NULL,
