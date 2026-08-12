@@ -6,6 +6,8 @@ import com.shinecraft.server.catalog.ServiceCategory;
 import com.shinecraft.server.catalog.ServiceCategoryRepository;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
+import com.shinecraft.server.loyalty.LoyaltyAccount;
+import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.Reward;
 import com.shinecraft.server.loyalty.RewardRepository;
 import com.shinecraft.server.loyalty.RewardType;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class DataSeeder implements CommandLineRunner {
     private final UserRepository userRepository;
     private final MembershipTierRepository tierRepository;
+    private final LoyaltyAccountRepository loyaltyAccountRepository;
     private final ServiceCategoryRepository categoryRepository;
     private final CarWashServiceRepository serviceRepository;
     private final RewardRepository rewardRepository;
@@ -30,10 +33,15 @@ public class DataSeeder implements CommandLineRunner {
     private final String adminPassword;
     private final String staffPhone;
     private final String staffPassword;
+    private final String customerOnePhone;
+    private final String customerTwoPhone;
+    private final String customerThreePhone;
+    private final String customerPassword;
 
     public DataSeeder(
             UserRepository userRepository,
             MembershipTierRepository tierRepository,
+            LoyaltyAccountRepository loyaltyAccountRepository,
             ServiceCategoryRepository categoryRepository,
             CarWashServiceRepository serviceRepository,
             RewardRepository rewardRepository,
@@ -41,9 +49,14 @@ public class DataSeeder implements CommandLineRunner {
             @Value("${app.admin.seed-phone}") String adminPhone,
             @Value("${app.admin.seed-password}") String adminPassword,
             @Value("${app.staff.seed-phone:0987654321}") String staffPhone,
-            @Value("${app.staff.seed-password:Staff@123456}") String staffPassword) {
+            @Value("${app.staff.seed-password:Staff@123456}") String staffPassword,
+            @Value("${app.customer-one.seed-phone:0911111111}") String customerOnePhone,
+            @Value("${app.customer-two.seed-phone:0922222222}") String customerTwoPhone,
+            @Value("${app.customer-three.seed-phone:0933333333}") String customerThreePhone,
+            @Value("${app.customer.seed-password:Customer@123456}") String customerPassword) {
         this.userRepository = userRepository;
         this.tierRepository = tierRepository;
+        this.loyaltyAccountRepository = loyaltyAccountRepository;
         this.categoryRepository = categoryRepository;
         this.serviceRepository = serviceRepository;
         this.rewardRepository = rewardRepository;
@@ -52,6 +65,10 @@ public class DataSeeder implements CommandLineRunner {
         this.adminPassword = adminPassword;
         this.staffPhone = staffPhone;
         this.staffPassword = staffPassword;
+        this.customerOnePhone = customerOnePhone;
+        this.customerTwoPhone = customerTwoPhone;
+        this.customerThreePhone = customerThreePhone;
+        this.customerPassword = customerPassword;
     }
 
     @Override
@@ -59,6 +76,7 @@ public class DataSeeder implements CommandLineRunner {
         seedAdmin();
         seedStaff();
         seedTiers();
+        seedCustomers();
         seedCatalog();
         seedRewards();
     }
@@ -106,6 +124,32 @@ public class DataSeeder implements CommandLineRunner {
         tier.setPriorityLevel(priority);
         tier.setDescription("Default " + name + " tier");
         tierRepository.save(tier);
+    }
+
+    private void seedCustomers() {
+        createCustomer("Nguyen Van An", customerOnePhone, customerPassword);
+        createCustomer("Tran Thi Binh", customerTwoPhone, customerPassword);
+        createCustomer("Le Hoang Minh", customerThreePhone, customerPassword);
+    }
+
+    private void createCustomer(String fullName, String phone, String password) {
+        if (userRepository.existsByPhone(phone)) {
+            return;
+        }
+
+        User customer = new User();
+        customer.setFullName(fullName);
+        customer.setPhone(phone);
+        customer.setPasswordHash(passwordEncoder.encode(password));
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+        customer = userRepository.save(customer);
+
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setCustomer(customer);
+        account.setMembershipTier(tierRepository
+                .findFirstByIsActiveTrueAndMinPointsLessThanEqualOrderByMinPointsDesc(0)
+                .orElse(null));
+        loyaltyAccountRepository.save(account);
     }
 
     private void seedCatalog() {

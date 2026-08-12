@@ -5,6 +5,10 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -12,9 +16,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.shinecraft.server.audit.AuditLog;
 import com.shinecraft.server.audit.AuditLogRepository;
+import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingRepository;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
+import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyService;
@@ -32,6 +40,9 @@ import com.shinecraft.server.loyalty.RewardRedemptionStatus;
 import com.shinecraft.server.loyalty.RewardRepository;
 import com.shinecraft.server.loyalty.RewardType;
 import com.shinecraft.server.promotion.PromotionRepository;
+import com.shinecraft.server.promotion.Promotion;
+import com.shinecraft.server.promotion.DiscountType;
+import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
@@ -44,12 +55,20 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -76,6 +95,12 @@ class ApplicationFlowIntegrationTests {
     private PromotionRepository promotionRepository;
 
     @Autowired
+    private PromotionService promotionService;
+
+    @MockitoSpyBean
+    private BookingRepository bookingRepository;
+
+    @Autowired
     private LoyaltyService loyaltyService;
 
     @Autowired
@@ -98,6 +123,11 @@ class ApplicationFlowIntegrationTests {
 
     @Autowired
     private AuditLogRepository auditLogRepository;
+
+    @AfterEach
+    void resetBookingRepositorySpy() {
+        reset(bookingRepository);
+    }
 
     @Test
     void authMeRequiresAuthentication() throws Exception {
@@ -334,6 +364,181 @@ class ApplicationFlowIntegrationTests {
         mockMvc.perform(statusPatch(adminToken, bookingId, "COMPLETED"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success", is(false)));
+    }
+
+    @Test
+    void cancellationRestoresPromotionUsageOnceAndRepeatedCancellationDoesNotRestoreAgain() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("P02-CANCEL-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("CANCELLED")));
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success", is(false)));
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+    }
+
+    @Test
+    void cancellationWithoutPromotionDoesNotChangePromotionUsage() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion unrelatedPromotion = createActivePromotion("P02-NO-PROMO-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, null);
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("CANCELLED")));
+
+        assertThat(promotionRepository.findById(unrelatedPromotion.getId()).orElseThrow().getUsedCount()).isZero();
+    }
+
+    @Test
+    void bookingFailureAfterPromotionClaimRollsBackPromotionUsage() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P02-ROLLBACK-" + SEQUENCE.getAndIncrement());
+        doThrow(new DataIntegrityViolationException("forced booking persistence failure"))
+                .when(bookingRepository)
+                .save(any(Booking.class));
+
+        mockMvc.perform(post("/api/bookings")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bookingJson(customer, promotion.getId(), nextSlot())))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.success", is(false)));
+
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+        assertThat(promotionAuditLogsForPromotion(promotion.getId())).isEmpty();
+    }
+
+    @Test
+    void successfulPromotionBookingCreatesOnePromotionUsedAudit() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P04-USED-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        List<AuditLog> auditLogs = promotionAuditLogsForBooking(bookingId);
+        assertThat(auditLogs).hasSize(1);
+        AuditLog audit = auditLogs.get(0);
+        assertThat(audit.getActor().getId()).isEqualTo(customer.user().getId());
+        assertThat(audit.getTargetUser().getId()).isEqualTo(customer.user().getId());
+        assertThat(audit.getAction()).isEqualTo("PROMOTION_USED");
+        assertThat(audit.getBeforeValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 0));
+        assertThat(audit.getAfterValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 1));
+    }
+
+    @Test
+    void successfulCancellationCreatesOnePromotionRestoredAuditAndRepeatedCancellationCreatesNone() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("P04-RESTORED-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk());
+
+        List<AuditLog> auditLogs = promotionAuditLogsForBooking(bookingId);
+        assertThat(auditLogs).hasSize(2);
+        AuditLog restoreAudit = auditLogs.stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_RESTORED"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(restoreAudit.getActor().getId()).isEqualTo(customer.user().getId());
+        assertThat(restoreAudit.getTargetUser().getId()).isEqualTo(customer.user().getId());
+        assertThat(restoreAudit.getBeforeValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 1));
+        assertThat(restoreAudit.getAfterValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 0));
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isBadRequest());
+        assertThat(promotionAuditLogsForBooking(bookingId)).hasSize(2);
+    }
+
+    @Test
+    void bookingWithoutPromotionCreatesNoPromotionAudit() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Long bookingId = createBooking(customer, null);
+
+        assertThat(promotionAuditLogsForBooking(bookingId)).isEmpty();
+    }
+
+    @Test
+    void concurrentClaimsForSingleUsePromotionAllowExactlyOneSuccess() throws Exception {
+        Promotion promotion = createActivePromotion("P03-LIMIT-ONE-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(1);
+        promotionRepository.save(promotion);
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(1);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentClaimsForFinalAvailableUsageAllowExactlyOneSuccess() throws Exception {
+        Promotion promotion = createActivePromotion("P03-FINAL-USE-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(10);
+        promotion.setUsedCount(9);
+        promotionRepository.save(promotion);
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(1);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(10);
+    }
+
+    @Test
+    void concurrentClaimsForUnlimitedPromotionBothSucceed() throws Exception {
+        Promotion promotion = createActivePromotion("P03-UNLIMITED-" + SEQUENCE.getAndIncrement());
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(2);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(2);
+    }
+
+    @Test
+    void bookingRollbackAfterPromotionClaimAllowsCompetingClaim() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P03-ROLLBACK-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(1);
+        promotionRepository.save(promotion);
+        CountDownLatch bookingSaveReached = new CountDownLatch(1);
+        CountDownLatch releaseBookingFailure = new CountDownLatch(1);
+        CountDownLatch competingClaimStarted = new CountDownLatch(1);
+        doThrowAfterLatch(bookingSaveReached, releaseBookingFailure);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> failedBooking = executor.submit(() -> {
+                try {
+                    mockMvc.perform(post("/api/bookings")
+                                    .header("Authorization", bearer(customer.token()))
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content(bookingJson(customer, promotion.getId(), nextSlot())))
+                            .andExpect(status().isInternalServerError());
+                } catch (Exception exception) {
+                    throw new AssertionError("Booking request should fail after promotion claim", exception);
+                }
+            });
+            assertThat(bookingSaveReached.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<Boolean> competingClaim = executor.submit(() -> {
+                competingClaimStarted.countDown();
+                promotionService.claimUsable(promotion.getId(), null);
+                return true;
+            });
+            assertThat(competingClaimStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            releaseBookingFailure.countDown();
+
+            failedBooking.get(10, TimeUnit.SECONDS);
+            assertThat(competingClaim.get(10, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            releaseBookingFailure.countDown();
+            executor.shutdownNow();
+        }
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
     }
 
     @Test
@@ -814,6 +1019,78 @@ class ApplicationFlowIntegrationTests {
             reward.setAddOnService(addOnService);
         }
         return rewardRepository.save(reward);
+    }
+
+    private Promotion createActivePromotion(String code) {
+        Promotion promotion = new Promotion();
+        promotion.setCode(code);
+        promotion.setTitle(code);
+        promotion.setDiscountType(DiscountType.FIXED_AMOUNT);
+        promotion.setDiscountValue(BigDecimal.TEN);
+        promotion.setStartAt(LocalDateTime.now().minusMinutes(1));
+        promotion.setEndAt(LocalDateTime.now().plusDays(1));
+        return promotionRepository.save(promotion);
+    }
+
+    private List<AuditLog> promotionAuditLogsForBooking(Long bookingId) {
+        return auditLogRepository.findAll().stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_USED")
+                        || audit.getAction().equals("PROMOTION_RESTORED"))
+                .filter(audit -> audit.getAfterValue().contains("\"bookingId\":" + bookingId + ","))
+                .toList();
+    }
+
+    private List<AuditLog> promotionAuditLogsForPromotion(Long promotionId) {
+        return auditLogRepository.findAll().stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_USED")
+                        || audit.getAction().equals("PROMOTION_RESTORED"))
+                .filter(audit -> audit.getAfterValue().contains("\"promotionId\":" + promotionId + ","))
+                .toList();
+    }
+
+    private String promotionAuditValue(Promotion promotion, Long bookingId, int usedCount) {
+        return "{\"promotionId\":%d,\"promotionCode\":\"%s\",\"bookingId\":%d,\"usedCount\":%d}"
+                .formatted(promotion.getId(), promotion.getCode(), bookingId, usedCount);
+    }
+
+    private int concurrentClaimSuccesses(Long promotionId) throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> firstClaim = executor.submit(() -> claimAfterConcurrentStart(promotionId, ready, start));
+            Future<Boolean> secondClaim = executor.submit(() -> claimAfterConcurrentStart(promotionId, ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            return (firstClaim.get(10, TimeUnit.SECONDS) ? 1 : 0) + (secondClaim.get(10, TimeUnit.SECONDS) ? 1 : 0);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private boolean claimAfterConcurrentStart(Long promotionId, CountDownLatch ready, CountDownLatch start)
+            throws InterruptedException {
+        ready.countDown();
+        start.await();
+        try {
+            promotionService.claimUsable(promotionId, null);
+            return true;
+        } catch (ApiException exception) {
+            return false;
+        }
+    }
+
+    private void doThrowAfterLatch(CountDownLatch bookingSaveReached, CountDownLatch releaseBookingFailure) {
+        doAnswer(invocation -> {
+                    bookingSaveReached.countDown();
+                    if (!releaseBookingFailure.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError("Timed out waiting to force the booking persistence failure");
+                    }
+                    throw new DataIntegrityViolationException("forced booking persistence failure");
+                })
+                .when(bookingRepository)
+                .save(any(Booking.class));
     }
 
     private CustomerContext registerCustomerUnchecked() {

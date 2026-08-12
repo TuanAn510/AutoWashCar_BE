@@ -183,7 +183,11 @@ public class BookingServiceLayer {
             addBookingService(booking, freeAddOnService, BigDecimal.ZERO);
         }
 
-        return BookingDtos.BookingResponse.from(bookingRepository.save(booking));
+        Booking savedBooking = bookingRepository.save(booking);
+        if (promotion != null) {
+            promotionService.recordPromotionUsed(promotion, savedBooking.getCustomer(), savedBooking.getId());
+        }
+        return BookingDtos.BookingResponse.from(savedBooking);
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
@@ -398,7 +402,11 @@ public class BookingServiceLayer {
 
     private void restoreCancellationResources(Booking booking) {
         if (booking.getPromotion() != null) {
-            promotionService.restoreUsage(booking.getPromotion());
+            Promotion promotion = booking.getPromotion();
+            int usedCountBefore = promotion.getUsedCount();
+            promotionService.restoreUsage(promotion);
+            promotionService.recordPromotionRestored(
+                    promotion, booking.getCustomer(), booking.getId(), usedCountBefore);
         }
         if (booking.getRewardRedemption() != null) {
             RewardRedemption redemption = booking.getRewardRedemption();
