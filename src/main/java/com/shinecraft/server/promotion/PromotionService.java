@@ -6,8 +6,10 @@ import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
 import com.shinecraft.server.user.AuthService;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,11 +66,23 @@ public class PromotionService {
                 : promotionRepository
                         .findById(id)
                         .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion not found"));
-        promotion.setCode(request.code().trim().toUpperCase());
+        String code = request.code().trim().toUpperCase();
+        promotionRepository
+                .findByCodeIgnoreCase(code)
+                .filter(existing -> !Objects.equals(existing.getId(), promotion.getId()))
+                .ifPresent(existing -> {
+                    throw new ApiException(HttpStatus.CONFLICT, "Promotion code already exists");
+                });
+        DiscountType discountType = request.resolvedDiscountType();
+        BigDecimal discountValue = request.discountValue();
+        validateDiscount(discountType, discountValue);
+        validateUsageLimit(request.usageLimit(), promotion.getUsedCount());
+
+        promotion.setCode(code);
         promotion.setTitle(request.title().trim());
         promotion.setDescription(request.description());
-        promotion.setDiscountType(request.resolvedDiscountType());
-        promotion.setDiscountValue(request.discountValue() == null ? java.math.BigDecimal.ZERO : request.discountValue());
+        promotion.setDiscountType(discountType);
+        promotion.setDiscountValue(discountValue);
         promotion.setStartAt(startAt);
         promotion.setEndAt(endAt);
         promotion.setUsageLimit(request.usageLimit());
@@ -83,6 +97,24 @@ public class PromotionService {
             promotion.setActive(request.resolvedActive());
         }
         return PromotionDtos.PromotionResponse.from(promotionRepository.save(promotion));
+    }
+
+    private void validateDiscount(DiscountType discountType, BigDecimal discountValue) {
+        if (discountValue == null || discountValue.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion discount value must be greater than zero");
+        }
+        if (discountType == DiscountType.PERCENTAGE && discountValue.compareTo(BigDecimal.valueOf(100)) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Percentage discount value must not exceed 100");
+        }
+    }
+
+    private void validateUsageLimit(Integer usageLimit, Integer usedCount) {
+        if (usageLimit != null && usageLimit <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion usage limit must be greater than zero");
+        }
+        if (usageLimit != null && usageLimit < usedCount) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion usage limit cannot be lower than used count");
+        }
     }
 
     @Transactional
