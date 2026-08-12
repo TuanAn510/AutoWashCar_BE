@@ -6,6 +6,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -20,6 +21,7 @@ import com.shinecraft.server.booking.Booking;
 import com.shinecraft.server.booking.BookingRepository;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
+import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyService;
@@ -39,6 +41,7 @@ import com.shinecraft.server.loyalty.RewardType;
 import com.shinecraft.server.promotion.PromotionRepository;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.DiscountType;
+import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
@@ -51,6 +54,11 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
@@ -84,6 +92,9 @@ class ApplicationFlowIntegrationTests {
 
     @Autowired
     private PromotionRepository promotionRepository;
+
+    @Autowired
+    private PromotionService promotionService;
 
     @MockitoSpyBean
     private BookingRepository bookingRepository;
@@ -404,6 +415,78 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath("$.success", is(false)));
 
         assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+    }
+
+    @Test
+    void concurrentClaimsForSingleUsePromotionAllowExactlyOneSuccess() throws Exception {
+        Promotion promotion = createActivePromotion("P03-LIMIT-ONE-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(1);
+        promotionRepository.save(promotion);
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(1);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentClaimsForFinalAvailableUsageAllowExactlyOneSuccess() throws Exception {
+        Promotion promotion = createActivePromotion("P03-FINAL-USE-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(10);
+        promotion.setUsedCount(9);
+        promotionRepository.save(promotion);
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(1);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(10);
+    }
+
+    @Test
+    void concurrentClaimsForUnlimitedPromotionBothSucceed() throws Exception {
+        Promotion promotion = createActivePromotion("P03-UNLIMITED-" + SEQUENCE.getAndIncrement());
+
+        assertThat(concurrentClaimSuccesses(promotion.getId())).isEqualTo(2);
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(2);
+    }
+
+    @Test
+    void bookingRollbackAfterPromotionClaimAllowsCompetingClaim() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P03-ROLLBACK-" + SEQUENCE.getAndIncrement());
+        promotion.setUsageLimit(1);
+        promotionRepository.save(promotion);
+        CountDownLatch bookingSaveReached = new CountDownLatch(1);
+        CountDownLatch releaseBookingFailure = new CountDownLatch(1);
+        CountDownLatch competingClaimStarted = new CountDownLatch(1);
+        doThrowAfterLatch(bookingSaveReached, releaseBookingFailure);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> failedBooking = executor.submit(() -> {
+                try {
+                    mockMvc.perform(post("/api/bookings")
+                                    .header("Authorization", bearer(customer.token()))
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content(bookingJson(customer, promotion.getId(), nextSlot())))
+                            .andExpect(status().isInternalServerError());
+                } catch (Exception exception) {
+                    throw new AssertionError("Booking request should fail after promotion claim", exception);
+                }
+            });
+            assertThat(bookingSaveReached.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<Boolean> competingClaim = executor.submit(() -> {
+                competingClaimStarted.countDown();
+                promotionService.claimUsable(promotion.getId(), null);
+                return true;
+            });
+            assertThat(competingClaimStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            releaseBookingFailure.countDown();
+
+            failedBooking.get(10, TimeUnit.SECONDS);
+            assertThat(competingClaim.get(10, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            releaseBookingFailure.countDown();
+            executor.shutdownNow();
+        }
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
     }
 
     @Test
@@ -895,6 +978,46 @@ class ApplicationFlowIntegrationTests {
         promotion.setStartAt(LocalDateTime.now().minusMinutes(1));
         promotion.setEndAt(LocalDateTime.now().plusDays(1));
         return promotionRepository.save(promotion);
+    }
+
+    private int concurrentClaimSuccesses(Long promotionId) throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> firstClaim = executor.submit(() -> claimAfterConcurrentStart(promotionId, ready, start));
+            Future<Boolean> secondClaim = executor.submit(() -> claimAfterConcurrentStart(promotionId, ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            return (firstClaim.get(10, TimeUnit.SECONDS) ? 1 : 0) + (secondClaim.get(10, TimeUnit.SECONDS) ? 1 : 0);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private boolean claimAfterConcurrentStart(Long promotionId, CountDownLatch ready, CountDownLatch start)
+            throws InterruptedException {
+        ready.countDown();
+        start.await();
+        try {
+            promotionService.claimUsable(promotionId, null);
+            return true;
+        } catch (ApiException exception) {
+            return false;
+        }
+    }
+
+    private void doThrowAfterLatch(CountDownLatch bookingSaveReached, CountDownLatch releaseBookingFailure) {
+        doAnswer(invocation -> {
+                    bookingSaveReached.countDown();
+                    if (!releaseBookingFailure.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError("Timed out waiting to force the booking persistence failure");
+                    }
+                    throw new DataIntegrityViolationException("forced booking persistence failure");
+                })
+                .when(bookingRepository)
+                .save(any(Booking.class));
     }
 
     private CustomerContext registerCustomerUnchecked() {
