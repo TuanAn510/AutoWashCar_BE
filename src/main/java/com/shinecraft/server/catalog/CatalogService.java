@@ -16,14 +16,30 @@ public class CatalogService {
         this.serviceRepository = serviceRepository;
     }
 
+    @Transactional(readOnly = true)
     public List<CatalogDtos.CategoryResponse> categories() {
         return categoryRepository.findByIsActiveTrueOrderByNameAsc().stream()
                 .map(CatalogDtos.CategoryResponse::from)
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<CatalogDtos.CategoryResponse> allCategories() {
+        return categoryRepository.findAll().stream()
+                .map(CatalogDtos.CategoryResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<CatalogDtos.ServiceResponse> services() {
         return serviceRepository.findByIsActiveTrueOrderByNameAsc().stream()
+                .map(CatalogDtos.ServiceResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<CatalogDtos.ServiceResponse> allServices() {
+        return serviceRepository.findAll().stream()
                 .map(CatalogDtos.ServiceResponse::from)
                 .toList();
     }
@@ -66,8 +82,8 @@ public class CatalogService {
     private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request) {
         category.setName(request.name().trim());
         category.setDescription(request.description());
-        if (request.active() != null) {
-            category.setActive(request.active());
+        if (request.resolvedActive() != null) {
+            category.setActive(request.resolvedActive());
         }
     }
 
@@ -79,9 +95,12 @@ public class CatalogService {
         service.setName(request.name().trim());
         service.setDescription(request.description());
         service.setPrice(request.price());
-        service.setDurationMinutes(request.durationMinutes());
-        if (request.active() != null) {
-            service.setActive(request.active());
+        if (request.resolvedDuration() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Estimated duration is required");
+        }
+        service.setDurationMinutes(request.resolvedDuration());
+        if (request.resolvedActive() != null) {
+            service.setActive(request.resolvedActive());
         }
     }
 }

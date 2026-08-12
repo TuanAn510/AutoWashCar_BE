@@ -106,7 +106,7 @@ public class BookingServiceLayer {
                             request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
                     .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
             if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(LocalDateTime.now())) {
-                redemption.setStatus(RewardRedemptionStatus.EXPIRED);
+                loyaltyService.markRedemptionExpired(redemption.getId());
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
             }
             Reward reward = redemption.getReward();

@@ -1,4 +1,4 @@
-package com.shinecraft.server.vehicle;
+package com.shinecraft.server.loyalty;
 
 import com.shinecraft.server.common.BaseEntity;
 import com.shinecraft.server.user.User;
@@ -11,6 +11,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -20,8 +22,8 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "vehicles")
-public class Vehicle extends BaseEntity {
+@Table(name = "loyalty_monthly_snapshots")
+public class LoyaltyMonthlySnapshot extends BaseEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -30,25 +32,26 @@ public class Vehicle extends BaseEntity {
     @JoinColumn(name = "customer_id")
     private User customer;
 
-    @Column(nullable = false, length = 20)
-    private String licensePlate;
-
-    @Column(nullable = false, length = 80)
-    private String brand;
-
-    @Column(nullable = false, length = 80)
-    private String model;
-
-    @Column(length = 40)
-    private String color;
-
-    private Integer manufactureYear;
+    @Column(nullable = false)
+    private LocalDate periodStart;
 
     @Column(nullable = false)
-    private boolean isActive = true;
+    private Integer reviewPoints = 0;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal reviewSpending = BigDecimal.ZERO;
 
     @Column(nullable = false)
-    private LocalDateTime ownershipStartAt = LocalDateTime.now();
+    private Long reviewVisits = 0L;
 
-    private LocalDateTime ownershipEndAt;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tier_before_id")
+    private MembershipTier tierBefore;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tier_after_id")
+    private MembershipTier tierAfter;
+
+    @Column(nullable = false)
+    private LocalDateTime reviewedAt;
 }

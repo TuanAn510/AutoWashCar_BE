@@ -28,6 +28,8 @@ public class DataSeeder implements CommandLineRunner {
     private final PasswordEncoder passwordEncoder;
     private final String adminPhone;
     private final String adminPassword;
+    private final String staffPhone;
+    private final String staffPassword;
 
     public DataSeeder(
             UserRepository userRepository,
@@ -37,7 +39,9 @@ public class DataSeeder implements CommandLineRunner {
             RewardRepository rewardRepository,
             PasswordEncoder passwordEncoder,
             @Value("${app.admin.seed-phone}") String adminPhone,
-            @Value("${app.admin.seed-password}") String adminPassword) {
+            @Value("${app.admin.seed-password}") String adminPassword,
+            @Value("${app.staff.seed-phone:0987654321}") String staffPhone,
+            @Value("${app.staff.seed-password:Staff@123456}") String staffPassword) {
         this.userRepository = userRepository;
         this.tierRepository = tierRepository;
         this.categoryRepository = categoryRepository;
@@ -46,11 +50,14 @@ public class DataSeeder implements CommandLineRunner {
         this.passwordEncoder = passwordEncoder;
         this.adminPhone = adminPhone;
         this.adminPassword = adminPassword;
+        this.staffPhone = staffPhone;
+        this.staffPassword = staffPassword;
     }
 
     @Override
     public void run(String... args) {
         seedAdmin();
+        seedStaff();
         seedTiers();
         seedCatalog();
         seedRewards();
@@ -66,6 +73,18 @@ public class DataSeeder implements CommandLineRunner {
         admin.setPasswordHash(passwordEncoder.encode(adminPassword));
         admin.setRole(UserRole.ROLE_ADMIN);
         userRepository.save(admin);
+    }
+
+    private void seedStaff() {
+        if (userRepository.existsByPhone(staffPhone)) {
+            return;
+        }
+        User staff = new User();
+        staff.setFullName("System Staff");
+        staff.setPhone(staffPhone);
+        staff.setPasswordHash(passwordEncoder.encode(staffPassword));
+        staff.setRole(UserRole.ROLE_STAFF);
+        userRepository.save(staff);
     }
 
     private void seedTiers() {

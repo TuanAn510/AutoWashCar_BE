@@ -4,6 +4,8 @@ import com.shinecraft.server.common.BaseEntity;
 import com.shinecraft.server.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -20,35 +22,35 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "vehicles")
-public class Vehicle extends BaseEntity {
+@Table(name = "vehicle_access_requests")
+public class VehicleAccessRequest extends BaseEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "customer_id")
-    private User customer;
+    @JoinColumn(name = "requester_id")
+    private User requester;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "vehicle_id")
+    private Vehicle vehicle;
 
     @Column(nullable = false, length = 20)
     private String licensePlate;
 
     @Column(nullable = false, length = 80)
-    private String brand;
+    private String relationship;
 
-    @Column(nullable = false, length = 80)
-    private String model;
+    @Column(columnDefinition = "TEXT")
+    private String note;
 
-    @Column(length = 40)
-    private String color;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private VehicleAccessRequestStatus status = VehicleAccessRequestStatus.PENDING;
 
-    private Integer manufactureYear;
+    @Column(columnDefinition = "TEXT")
+    private String reviewNote;
 
-    @Column(nullable = false)
-    private boolean isActive = true;
-
-    @Column(nullable = false)
-    private LocalDateTime ownershipStartAt = LocalDateTime.now();
-
-    private LocalDateTime ownershipEndAt;
+    private LocalDateTime reviewedAt;
 }

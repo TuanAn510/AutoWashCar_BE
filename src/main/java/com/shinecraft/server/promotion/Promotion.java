@@ -13,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Getter;
@@ -62,4 +63,7 @@ public class Promotion extends BaseEntity {
 
     @Column(nullable = false)
     private boolean isActive = true;
+
+    @Version
+    private Long version = 0L;
 }

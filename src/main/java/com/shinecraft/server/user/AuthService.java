@@ -1,12 +1,15 @@
 package com.shinecraft.server.user;
 
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.LicensePlateNormalizer;
+import com.shinecraft.server.common.PhoneNormalizer;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
 import com.shinecraft.server.security.JwtService;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
+import java.time.LocalDateTime;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -21,6 +24,7 @@ public class AuthService {
     private final MembershipTierRepository membershipTierRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthService(
             UserRepository userRepository,
@@ -28,23 +32,25 @@ public class AuthService {
             LoyaltyAccountRepository loyaltyAccountRepository,
             MembershipTierRepository membershipTierRepository,
             PasswordEncoder passwordEncoder,
-            JwtService jwtService) {
+            JwtService jwtService,
+            RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.vehicleRepository = vehicleRepository;
         this.loyaltyAccountRepository = loyaltyAccountRepository;
         this.membershipTierRepository = membershipTierRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @Transactional
     public UserDtos.AuthResponse register(UserDtos.RegisterRequest request) {
-        String phone = request.phone().trim();
-        String licensePlate = normalizePlate(request.licensePlate());
+        String phone = PhoneNormalizer.normalize(request.phone());
+        String licensePlate = LicensePlateNormalizer.normalize(request.licensePlate());
         if (userRepository.existsByPhone(phone)) {
             throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
         }
-        if (vehicleRepository.existsByLicensePlate(licensePlate)) {
+        if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(licensePlate)) {
             throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }
 
@@ -62,6 +68,7 @@ public class AuthService {
         vehicle.setModel(request.model().trim());
         vehicle.setColor(request.color());
         vehicle.setManufactureYear(request.manufactureYear());
+        vehicle.setOwnershipStartAt(LocalDateTime.now());
         vehicleRepository.save(vehicle);
 
         LoyaltyAccount account = new LoyaltyAccount();
@@ -76,7 +83,7 @@ public class AuthService {
 
     public UserDtos.AuthResponse login(UserDtos.LoginRequest request) {
         User user = userRepository
-                .findByPhone(request.phone().trim())
+                .findByPhone(PhoneNormalizer.normalize(request.phone()))
                 .filter(User::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid phone number or password"));
 
@@ -87,6 +94,39 @@ public class AuthService {
         return authResponse(user);
     }
 
+    @Transactional
+    public UserDtos.UserResponse signup(UserDtos.SignupRequest request) {
+        String phone = PhoneNormalizer.normalize(request.phone());
+        if (userRepository.existsByPhone(phone)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
+        }
+
+        User user = new User();
+        user.setFullName((request.lastName().trim() + " " + request.firstName().trim()).trim());
+        user.setPhone(phone);
+        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setRole(UserRole.ROLE_CUSTOMER);
+        user = userRepository.save(user);
+
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setCustomer(user);
+        account.setMembershipTier(membershipTierRepository
+                .findFirstByIsActiveTrueAndMinPointsLessThanEqualOrderByMinPointsDesc(0)
+                .orElse(null));
+        loyaltyAccountRepository.save(account);
+
+        return UserDtos.UserResponse.from(user);
+    }
+
+    public UserDtos.AuthResponse refresh(UserDtos.RefreshTokenRequest request) {
+        RefreshTokenService.RotatedRefreshToken rotatedToken = refreshTokenService.rotate(request.refreshToken());
+        return authResponse(rotatedToken.user(), rotatedToken.refreshToken());
+    }
+
+    public void logout(UserDtos.LogoutRequest request) {
+        refreshTokenService.revoke(request.refreshToken());
+    }
+
     public User currentUser() {
         String phone = SecurityContextHolder.getContext().getAuthentication().getName();
         return userRepository
@@ -95,10 +135,12 @@ public class AuthService {
     }
 
     private UserDtos.AuthResponse authResponse(User user) {
-        return new UserDtos.AuthResponse(jwtService.generateToken(user), UserDtos.UserResponse.from(user));
+        return authResponse(user, refreshTokenService.create(user));
     }
 
-    private String normalizePlate(String value) {
-        return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase();
+    private UserDtos.AuthResponse authResponse(User user, String refreshToken) {
+        return new UserDtos.AuthResponse(
+                jwtService.generateToken(user), refreshToken, "Bearer", UserDtos.UserResponse.from(user));
     }
+
 }

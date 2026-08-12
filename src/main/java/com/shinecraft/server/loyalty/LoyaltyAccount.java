@@ -12,6 +12,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Getter;
@@ -49,4 +50,7 @@ public class LoyaltyAccount extends BaseEntity {
     private MembershipTier membershipTier;
 
     private LocalDateTime lastReviewedAt;
+
+    @Version
+    private Long version = 0L;
 }

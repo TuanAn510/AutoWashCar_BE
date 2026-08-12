@@ -239,6 +239,7 @@ public final class BookingDtos {
     private static String toFrontendRole(UserRole role) {
         return switch (role) {
             case ROLE_ADMIN -> "admin";
+            case ROLE_STAFF -> "staff";
             case ROLE_CUSTOMER -> "customer";
         };
     }

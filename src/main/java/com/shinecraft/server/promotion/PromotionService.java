@@ -30,6 +30,7 @@ public class PromotionService {
         this.authService = authService;
     }
 
+    @Transactional(readOnly = true)
     public List<PromotionDtos.PromotionResponse> activeForCurrentCustomer() {
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(authService.currentUser());
         MembershipTier customerTier = account.getMembershipTier();
@@ -43,13 +44,19 @@ public class PromotionService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
     public List<PromotionDtos.PromotionResponse> all() {
         return promotionRepository.findAll().stream().map(PromotionDtos.PromotionResponse::from).toList();
     }
 
     @Transactional
     public PromotionDtos.PromotionResponse save(Long id, PromotionDtos.PromotionRequest request) {
-        if (request.startAt().isAfter(request.endAt()) || request.startAt().isEqual(request.endAt())) {
+        LocalDateTime startAt = request.resolvedStartAt();
+        LocalDateTime endAt = request.resolvedEndAt();
+        if (startAt == null || endAt == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion start date and end date are required");
+        }
+        if (startAt.isAfter(endAt) || startAt.isEqual(endAt)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "End date must be after start date");
         }
         Promotion promotion = id == null
@@ -60,28 +67,46 @@ public class PromotionService {
         promotion.setCode(request.code().trim().toUpperCase());
         promotion.setTitle(request.title().trim());
         promotion.setDescription(request.description());
-        promotion.setDiscountType(request.discountType());
-        promotion.setDiscountValue(request.discountValue());
-        promotion.setStartAt(request.startAt());
-        promotion.setEndAt(request.endAt());
+        promotion.setDiscountType(request.resolvedDiscountType());
+        promotion.setDiscountValue(request.discountValue() == null ? java.math.BigDecimal.ZERO : request.discountValue());
+        promotion.setStartAt(startAt);
+        promotion.setEndAt(endAt);
         promotion.setUsageLimit(request.usageLimit());
-        if (request.targetTierId() != null) {
+        if (request.resolvedTargetTierId() != null) {
             promotion.setTargetTier(tierRepository
-                    .findById(request.targetTierId())
+                    .findById(request.resolvedTargetTierId())
                     .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Target membership tier not found")));
         } else {
             promotion.setTargetTier(null);
         }
-        if (request.active() != null) {
-            promotion.setActive(request.active());
+        if (request.resolvedActive() != null) {
+            promotion.setActive(request.resolvedActive());
         }
+        return PromotionDtos.PromotionResponse.from(promotionRepository.save(promotion));
+    }
+
+    @Transactional
+    public PromotionDtos.PromotionResponse updateStatus(Long id, boolean active) {
+        Promotion promotion = promotionRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion not found"));
+        promotion.setActive(active);
+        return PromotionDtos.PromotionResponse.from(promotionRepository.save(promotion));
+    }
+
+    @Transactional
+    public PromotionDtos.PromotionResponse delete(Long id) {
+        Promotion promotion = promotionRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion not found"));
+        promotion.setActive(false);
         return PromotionDtos.PromotionResponse.from(promotionRepository.save(promotion));
     }
 
     @Transactional
     public Promotion claimUsable(Long promotionId, LoyaltyAccount account) {
         Promotion promotion = promotionRepository
-                .findById(promotionId)
+                .findByIdForUpdate(promotionId)
                 .filter(Promotion::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Promotion is not available"));
         LocalDateTime now = LocalDateTime.now();
