@@ -8,10 +8,12 @@ Additional migrations:
 
 - `V2__allow_rebooking_cancelled_slots.sql`: changes booking slot uniqueness so cancelled bookings release their slot.
 - `V3__loyalty_user_management_hardening.sql`: adds point lots, monthly loyalty snapshots, audit logs, optimistic lock versions, and active-license-plate uniqueness.
+- `V4__refresh_tokens.sql`: adds hashed refresh token storage for token rotation and logout-based revocation.
 
 ## Main Tables
 
 - `users`: customer/admin accounts, unique phone, password hash, role.
+- `refresh_tokens`: hashed refresh tokens, expiry timestamps, revocation timestamps, and rotation linkage.
 - `vehicles`: customer vehicles with active-license-plate uniqueness and ownership timestamps.
 - `service_categories`: service groups.
 - `services`: wash car services with price and duration.
@@ -31,6 +33,7 @@ Additional migrations:
 ## Key Relationships
 
 - `users 1-n vehicles`
+- `users 1-n refresh_tokens`
 - `users 1-1 loyalty_accounts`
 - `users 1-n point_lots`
 - `users 1-n loyalty_monthly_snapshots`
@@ -47,6 +50,7 @@ Additional migrations:
 ## Business Rules In DB/Model
 
 - User phone is unique after normalization.
+- Refresh tokens are stored as hashes and can be revoked or rotated without changing the stateless JWT access-token flow.
 - Vehicle license plate is unique only for active vehicles, so inactive historical ownership does not block reuse.
 - Each active booking slot `scheduled_at` is unique. Cancelled bookings do not block the same slot from being booked again.
 - Booking services are stored as snapshots in `booking_services`.

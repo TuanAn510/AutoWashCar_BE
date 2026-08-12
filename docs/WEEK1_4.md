@@ -63,7 +63,7 @@ $env:DB_URL="jdbc:sqlserver://localhost:1433;databaseName=wash_car_service;encry
 $env:DB_USERNAME="sa"
 $env:DB_PASSWORD="your_sql_server_password"
 $env:JWT_SECRET="change-this-to-a-long-secret-at-least-32-bytes"
-$env:CORS_ALLOWED_ORIGINS="http://localhost:5173,https://your-temporary-frontend.example"
+$env:CORS_ALLOWED_ORIGINS="http://localhost:3000,https://your-temporary-frontend.example"
 ```
 
 Run with Maven Wrapper:

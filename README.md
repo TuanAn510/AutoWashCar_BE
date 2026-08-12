@@ -96,7 +96,7 @@ Bearer <token>
 
 ## Main Modules
 
-- Auth: customer registration, admin/customer login, JWT authentication, current user profile.
+- Auth: customer registration, admin/customer login, JWT authentication, refresh token rotation/revocation, current user profile.
 - Vehicle: customer-owned vehicle management.
 - Catalog: service categories and car wash services.
 - Booking: slot availability, booking creation, booking history, and a guarded status lifecycle.
@@ -119,6 +119,7 @@ src/main/resources/db/migration/V1__init_schema.sql
 Main tables:
 
 - `users`
+- `refresh_tokens`
 - `vehicles`
 - `service_categories`
 - `services`
