@@ -19,5 +19,8 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     @EntityGraph(attributePaths = {"customer", "vehicle", "services"})
     List<Booking> findByStatusInOrderByScheduledAtAsc(List<BookingStatus> statuses);
 
+    @EntityGraph(attributePaths = {"assignedStaff"})
+    List<Booking> findByAssignedStaffIsNotNull();
+
     boolean existsByScheduledAtAndStatusIn(LocalDateTime scheduledAt, List<BookingStatus> statuses);
 }
