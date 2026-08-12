@@ -19,6 +19,7 @@ import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -38,6 +40,8 @@ public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
     private static final int SLOT_MINUTES = 30;
+    private static final List<BookingStatus> OCCUPIED_STATUSES =
+            List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
             BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
             BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
@@ -170,6 +174,7 @@ public class BookingServiceLayer {
         Set<LocalDateTime> occupiedSlots = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
+                .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
                 .flatMap(this::occupiedSlots)
                 .collect(Collectors.toSet());
 
@@ -185,26 +190,26 @@ public class BookingServiceLayer {
 
     @Transactional(readOnly = true)
     public List<BookingDtos.QueueItemResponse> priorityQueue() {
-        List<BookingStatus> statuses = List.of(BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
-        return bookingRepository.findByStatusInOrderByScheduledAtAsc(statuses).stream()
-                .map(booking -> {
-                    LoyaltyAccount account = loyaltyService.getOrCreateAccount(booking.getCustomer());
-                    Integer priority = account.getMembershipTier() == null ? 0 : account.getMembershipTier().getPriorityLevel();
-                    String tierName = account.getMembershipTier() == null ? "Member" : account.getMembershipTier().getName();
-                    return new BookingDtos.QueueItemResponse(
-                            booking.getId(),
-                            booking.getScheduledAt(),
-                            booking.getCustomer().getFullName(),
-                            booking.getVehicle().getLicensePlate(),
-                            tierName,
-                            priority,
-                            booking.getStatus(),
-                            booking.getFinalAmount());
-                })
-                .sorted(Comparator.comparing(BookingDtos.QueueItemResponse::priorityLevel)
-                        .reversed()
-                        .thenComparing(BookingDtos.QueueItemResponse::scheduledAt))
+        LocalDateTime now = LocalDateTime.now();
+        List<Booking> bookings = bookingRepository.findByStatusInOrderByScheduledAtAsc(
+                List.of(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS));
+
+        List<BookingDtos.QueueItemResponse> inProgress = bookings.stream()
+                .filter(booking -> booking.getStatus() == BookingStatus.IN_PROGRESS)
+                .map(booking -> queueItem(booking, now, null))
+                .sorted(Comparator.comparing(BookingDtos.QueueItemResponse::bookingId))
                 .toList();
+
+        List<BookingDtos.QueueItemResponse> waiting = bookings.stream()
+                .filter(booking -> booking.getStatus() == BookingStatus.IN_QUEUE)
+                .map(booking -> queueItem(booking, now, null))
+                .sorted(waitingQueueComparator())
+                .toList();
+
+        List<BookingDtos.QueueItemResponse> positionedWaiting = IntStream.range(0, waiting.size())
+                .mapToObj(index -> withPosition(waiting.get(index), index + 1))
+                .toList();
+        return Stream.concat(inProgress.stream(), positionedWaiting.stream()).toList();
     }
 
     @Transactional
@@ -212,7 +217,11 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
-        validateStatusTransition(booking.getStatus(), status);
+        BookingStatus currentStatus = booking.getStatus();
+        validateStatusTransition(currentStatus, status);
+        if (currentStatus == BookingStatus.CONFIRMED && status == BookingStatus.IN_QUEUE && booking.getCheckInAt() == null) {
+            booking.setCheckInAt(LocalDateTime.now());
+        }
         if (status == BookingStatus.CANCELLED) {
             restoreCancellationResources(booking);
         }
@@ -258,6 +267,54 @@ public class BookingServiceLayer {
         }
     }
 
+    private BookingDtos.QueueItemResponse queueItem(Booking booking, LocalDateTime now, Integer position) {
+        LoyaltyAccount account = loyaltyService.getOrCreateAccount(booking.getCustomer());
+        Integer priority = account.getMembershipTier() == null ? 0 : account.getMembershipTier().getPriorityLevel();
+        String tierName = account.getMembershipTier() == null ? "Member" : account.getMembershipTier().getName();
+        LocalDateTime checkInAt = booking.getCheckInAt();
+        Long waitingMinutes = booking.getStatus() == BookingStatus.IN_QUEUE && checkInAt != null
+                ? Duration.between(checkInAt, now).toMinutes()
+                : null;
+        return new BookingDtos.QueueItemResponse(
+                booking.getId(),
+                booking.getScheduledAt(),
+                booking.getCustomer().getFullName(),
+                booking.getVehicle().getLicensePlate(),
+                tierName,
+                priority,
+                booking.getStatus(),
+                booking.getFinalAmount(),
+                checkInAt,
+                waitingMinutes,
+                totalDuration(booking),
+                position);
+    }
+
+    private Comparator<BookingDtos.QueueItemResponse> waitingQueueComparator() {
+        return Comparator.comparing(BookingDtos.QueueItemResponse::priorityLevel, Comparator.reverseOrder())
+                .thenComparing(item -> item.checkInAt() == null)
+                .thenComparing(
+                        BookingDtos.QueueItemResponse::checkInAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(BookingDtos.QueueItemResponse::serviceDurationMinutes)
+                .thenComparing(BookingDtos.QueueItemResponse::bookingId);
+    }
+
+    private BookingDtos.QueueItemResponse withPosition(BookingDtos.QueueItemResponse item, int position) {
+        return new BookingDtos.QueueItemResponse(
+                item.bookingId(),
+                item.scheduledAt(),
+                item.customerName(),
+                item.licensePlate(),
+                item.tierName(),
+                item.priorityLevel(),
+                item.status(),
+                item.finalAmount(),
+                item.checkInAt(),
+                item.waitingMinutes(),
+                item.serviceDurationMinutes(),
+                position);
+    }
+
     private void validateBookingWindow(LocalDateTime scheduledAt, LoyaltyAccount account) {
         int windowDays = account.getMembershipTier() == null ? 7 : account.getMembershipTier().getBookingWindowDays();
         if (scheduledAt.isAfter(LocalDateTime.now().plusDays(windowDays))) {
@@ -271,7 +328,7 @@ public class BookingServiceLayer {
         if (!isAlignedSlot(scheduledAt.toLocalTime())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Booking slot must be between 08:00 and 17:00 and aligned to 30-minute intervals");
         }
-        if (bookingRepository.existsByScheduledAt(scheduledAt)) {
+        if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
         }
     }
@@ -303,6 +360,7 @@ public class BookingServiceLayer {
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(
                         scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
                 .stream()
+                .filter(existing -> OCCUPIED_STATUSES.contains(existing.getStatus()))
                 .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
         if (overlaps) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot overlaps an existing booking");

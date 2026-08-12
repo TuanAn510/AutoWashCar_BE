@@ -13,6 +13,7 @@ import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
+import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
@@ -77,25 +78,25 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void availabilityMarksCancelledSlotAsBooked() {
+    void availabilityMarksCancelledSlotAsAvailable() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(8, 0), BookingStatus.CANCELLED)));
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(8, 0), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(8, 0), true, null);
     }
 
     @Test
-    void availabilityMarksCompletedSlotAsBooked() {
+    void availabilityMarksCompletedSlotAsAvailable() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(8, 0), BookingStatus.COMPLETED)));
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(8, 0), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(8, 0), true, null);
     }
 
     @Test
@@ -126,7 +127,7 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void availabilityKeepsCancelledAndCompletedBookingDurationsBlocked() {
+    void availabilityIgnoresCancelledAndCompletedBookingDurations() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(
@@ -135,8 +136,8 @@ class BookingServiceLayerTest {
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(9, 30), false, "BOOKED");
-        assertSlot(response, date, LocalTime.of(10, 30), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(9, 30), true, null);
+        assertSlot(response, date, LocalTime.of(10, 30), true, null);
     }
 
     @Test
@@ -150,16 +151,25 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createRejectsAUsedSlotRegardlessOfBookingStatus() {
+    void createRejectsAUsedSlotWithAnOccupiedStatus() {
         LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 0);
         Vehicle vehicle = new Vehicle();
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
-        when(bookingRepository.existsByScheduledAt(scheduledAt)).thenReturn(true);
+        when(bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
+                .thenReturn(true);
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("This booking slot is already reserved");
-        verify(bookingRepository).existsByScheduledAt(scheduledAt);
+        verify(bookingRepository).existsByScheduledAtAndStatusIn(scheduledAt, List.of(
+                BookingStatus.PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.IN_QUEUE,
+                BookingStatus.IN_PROGRESS));
     }
 
     @Test
@@ -194,6 +204,19 @@ class BookingServiceLayerTest {
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("This booking slot overlaps an existing booking");
+    }
+
+    @Test
+    void createAllowsAnOverlapWithACancelledBooking() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        LocalDateTime scheduledAt = date.atTime(9, 30);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.CANCELLED, 90)));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
     }
 
     @Test
@@ -336,6 +359,173 @@ class BookingServiceLayerTest {
         assertThat(response.status()).isEqualTo(BookingStatus.CANCELLED);
     }
 
+    @Test
+    void statusTransitionToInQueueRecordsCheckInTime() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        LocalDateTime before = LocalDateTime.now();
+
+        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.IN_QUEUE);
+
+        assertThat(response.status()).isEqualTo(BookingStatus.IN_QUEUE);
+        assertThat(booking.getCheckInAt()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void subsequentTransitionToInProgressPreservesCheckInTime() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_QUEUE);
+        LocalDateTime checkInAt = LocalDateTime.now().minusMinutes(10);
+        booking.setCheckInAt(checkInAt);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS);
+
+        assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
+    }
+
+    @Test
+    void repeatedCheckInIsRejectedWithoutResettingCheckInTime() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_QUEUE);
+        LocalDateTime checkInAt = LocalDateTime.now().minusMinutes(10);
+        booking.setCheckInAt(checkInAt);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.IN_QUEUE))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid booking status transition from IN_QUEUE to IN_QUEUE");
+        assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
+    }
+
+    @Test
+    void priorityQueueExcludesConfirmedAndTerminalBookings() {
+        Booking confirmed = queueBooking(1L, BookingStatus.CONFIRMED, 1, null, 30);
+        Booking completed = queueBooking(2L, BookingStatus.COMPLETED, 1, null, 30);
+        Booking cancelled = queueBooking(3L, BookingStatus.CANCELLED, 1, null, 30);
+        Booking inQueue = queueBooking(4L, BookingStatus.IN_QUEUE, 1, LocalDateTime.now().minusMinutes(5), 30);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(confirmed, completed, cancelled, inQueue));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(4L);
+    }
+
+    @Test
+    void priorityQueueRanksHigherMembershipPriorityFirst() {
+        Booking lowerPriority = queueBooking(1L, BookingStatus.IN_QUEUE, 1, LocalDateTime.now().minusMinutes(30), 30);
+        Booking higherPriority = queueBooking(2L, BookingStatus.IN_QUEUE, 2, LocalDateTime.now().minusMinutes(5), 30);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(lowerPriority, higherPriority));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void priorityQueueRanksTimestampedCheckInsBeforeLegacyEntries() {
+        Booking legacy = queueBooking(1L, BookingStatus.IN_QUEUE, 1, null, 30);
+        Booking timestamped = queueBooking(2L, BookingStatus.IN_QUEUE, 1, LocalDateTime.now().minusMinutes(1), 90);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any())).thenReturn(List.of(legacy, timestamped));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(2L, 1L);
+        assertThat(queue.get(1).checkInAt()).isNull();
+        assertThat(queue.get(1).waitingMinutes()).isNull();
+        assertThat(queue.get(1).position()).isEqualTo(2);
+    }
+
+    @Test
+    void priorityQueueRanksEarlierCheckInsBeforeLaterCheckIns() {
+        LocalDateTime now = LocalDateTime.now();
+        Booking laterCheckIn = queueBooking(1L, BookingStatus.IN_QUEUE, 1, now.minusMinutes(5), 30);
+        Booking earlierCheckIn = queueBooking(2L, BookingStatus.IN_QUEUE, 1, now.minusMinutes(10), 90);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(laterCheckIn, earlierCheckIn));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void priorityQueueRanksShorterDurationAfterSameTierAndCheckInTime() {
+        LocalDateTime checkInAt = LocalDateTime.now().minusMinutes(10);
+        Booking longerDuration = queueBooking(1L, BookingStatus.IN_QUEUE, 1, checkInAt, 60);
+        Booking shorterDuration = queueBooking(2L, BookingStatus.IN_QUEUE, 1, checkInAt, 30);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(longerDuration, shorterDuration));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void legacyPriorityQueueEntriesUseSnapshotDurationThenBookingId() {
+        Booking laterId = queueBooking(5L, BookingStatus.IN_QUEUE, 1, null, 30);
+        Booking earlierId = queueBooking(4L, BookingStatus.IN_QUEUE, 1, null, 30);
+        Booking longerDuration = queueBooking(3L, BookingStatus.IN_QUEUE, 1, null, 60);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(laterId, earlierId, longerDuration));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(4L, 5L, 3L);
+    }
+
+    @Test
+    void priorityQueueUsesSummedBookingServiceDurationSnapshots() {
+        Booking booking = queueBooking(1L, BookingStatus.IN_QUEUE, 1, LocalDateTime.now().minusMinutes(5), 30, 45);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any())).thenReturn(List.of(booking));
+
+        BookingDtos.QueueItemResponse item = bookingService.priorityQueue().get(0);
+
+        assertThat(item.serviceDurationMinutes()).isEqualTo(75);
+    }
+
+    @Test
+    void priorityQueueUsesZeroPriorityForCustomersWithoutMembership() {
+        Booking booking = queueBooking(1L, BookingStatus.IN_QUEUE, 0, LocalDateTime.now().minusMinutes(5), 30);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any())).thenReturn(List.of(booking));
+
+        BookingDtos.QueueItemResponse item = bookingService.priorityQueue().get(0);
+
+        assertThat(item.priorityLevel()).isZero();
+        assertThat(item.tierName()).isEqualTo("Member");
+    }
+
+    @Test
+    void inProgressBookingsAreReturnedBeforeWaitingBookingsWithoutQueuePositions() {
+        Booking lowerPriorityInProgress =
+                queueBooking(5L, BookingStatus.IN_PROGRESS, 1, LocalDateTime.now().minusMinutes(10), 30);
+        Booking higherPriorityInProgress =
+                queueBooking(3L, BookingStatus.IN_PROGRESS, 3, LocalDateTime.now().minusMinutes(20), 30);
+        Booking waiting = queueBooking(1L, BookingStatus.IN_QUEUE, 3, LocalDateTime.now().minusMinutes(30), 30);
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any()))
+                .thenReturn(List.of(lowerPriorityInProgress, higherPriorityInProgress, waiting));
+
+        List<BookingDtos.QueueItemResponse> queue = bookingService.priorityQueue();
+
+        assertThat(queue).extracting(BookingDtos.QueueItemResponse::bookingId).containsExactly(3L, 5L, 1L);
+        assertThat(queue.get(0).position()).isNull();
+        assertThat(queue.get(0).waitingMinutes()).isNull();
+        assertThat(queue.get(2).position()).isEqualTo(1);
+    }
+
+    @Test
+    void legacyQueueEntryNeverUsesScheduledAtAsWaitingTimeFallback() {
+        Booking legacy = queueBooking(1L, BookingStatus.IN_QUEUE, 1, null, 30);
+        legacy.setScheduledAt(LocalDateTime.now().minusDays(3));
+        when(bookingRepository.findByStatusInOrderByScheduledAtAsc(any())).thenReturn(List.of(legacy));
+
+        BookingDtos.QueueItemResponse item = bookingService.priorityQueue().get(0);
+
+        assertThat(item.checkInAt()).isNull();
+        assertThat(item.waitingMinutes()).isNull();
+    }
+
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt) {
         return new BookingDtos.CreateBookingRequest(1L, List.of(1L), scheduledAt, null, null, null);
     }
@@ -404,6 +594,35 @@ class BookingServiceLayerTest {
         redemption.setUsedAt(LocalDateTime.now().minusMinutes(1));
         redemption.setExpiresAt(expiresAt);
         return redemption;
+    }
+
+    private Booking queueBooking(
+            Long id, BookingStatus status, int priorityLevel, LocalDateTime checkInAt, int... durationMinutes) {
+        User queueCustomer = new User();
+        Vehicle queueVehicle = new Vehicle();
+        Booking booking = new Booking();
+        booking.setId(id);
+        booking.setCustomer(queueCustomer);
+        booking.setVehicle(queueVehicle);
+        booking.setStatus(status);
+        booking.setScheduledAt(LocalDateTime.now().plusDays(1).plusMinutes(id));
+        booking.setCheckInAt(checkInAt);
+        booking.setFinalAmount(BigDecimal.TEN);
+        for (int duration : durationMinutes) {
+            BookingService item = new BookingService();
+            item.setDurationMinutes(duration);
+            booking.addService(item);
+        }
+
+        LoyaltyAccount queueAccount = new LoyaltyAccount();
+        if (priorityLevel > 0) {
+            MembershipTier tier = new MembershipTier();
+            tier.setName("Tier " + priorityLevel);
+            tier.setPriorityLevel(priorityLevel);
+            queueAccount.setMembershipTier(tier);
+        }
+        when(loyaltyService.getOrCreateAccount(queueCustomer)).thenReturn(queueAccount);
+        return booking;
     }
 
     private void assertSlot(

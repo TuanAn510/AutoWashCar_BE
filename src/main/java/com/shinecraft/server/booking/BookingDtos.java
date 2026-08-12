@@ -74,5 +74,9 @@ public final class BookingDtos {
             String tierName,
             Integer priorityLevel,
             BookingStatus status,
-            BigDecimal finalAmount) {}
+            BigDecimal finalAmount,
+            LocalDateTime checkInAt,
+            Long waitingMinutes,
+            Integer serviceDurationMinutes,
+            Integer position) {}
 }

@@ -18,7 +18,6 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -31,7 +30,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "bookings", uniqueConstraints = @UniqueConstraint(name = "uk_bookings_scheduled_at", columnNames = "scheduled_at"))
+@Table(name = "bookings")
 public class Booking extends BaseEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -47,6 +46,9 @@ public class Booking extends BaseEntity {
 
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
+
+    @Column(name = "check_in_at")
+    private LocalDateTime checkInAt;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
