@@ -10,6 +10,9 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     @EntityGraph(attributePaths = {"customer", "vehicle", "services"})
     List<Booking> findByCustomerOrderByScheduledAtDesc(User customer);
 
+    @EntityGraph(attributePaths = {"customer", "vehicle", "assignedStaff", "services"})
+    List<Booking> findByAssignedStaffOrderByScheduledAtDesc(User assignedStaff);
+
     @EntityGraph(attributePaths = {"customer", "vehicle", "services"})
     List<Booking> findByScheduledAtBetweenOrderByScheduledAtAsc(LocalDateTime start, LocalDateTime end);
 

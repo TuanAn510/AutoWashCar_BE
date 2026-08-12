@@ -15,6 +15,8 @@ import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
+import com.shinecraft.server.user.UserRepository;
+import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.math.BigDecimal;
@@ -58,6 +60,7 @@ public class BookingServiceLayer {
     private final LoyaltyService loyaltyService;
     private final PromotionService promotionService;
     private final AuthService authService;
+    private final UserRepository userRepository;
     private final int pointsAmountUnit;
 
     public BookingServiceLayer(
@@ -68,6 +71,7 @@ public class BookingServiceLayer {
             LoyaltyService loyaltyService,
             PromotionService promotionService,
             AuthService authService,
+            UserRepository userRepository,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
         this.vehicleRepository = vehicleRepository;
@@ -76,6 +80,7 @@ public class BookingServiceLayer {
         this.loyaltyService = loyaltyService;
         this.promotionService = promotionService;
         this.authService = authService;
+        this.userRepository = userRepository;
         this.pointsAmountUnit = pointsAmountUnit;
     }
 
@@ -202,6 +207,17 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
+    public List<BookingDtos.AppointmentResponse> myStaffAppointments() {
+        User staff = authService.currentUser();
+        if (staff.getRole() == UserRole.ROLE_ADMIN) {
+            return allAppointments();
+        }
+        return bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff).stream()
+                .map(BookingDtos.AppointmentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<BookingDtos.AppointmentResponse> allAppointments() {
         return bookingRepository.findAll().stream()
                 .sorted(Comparator.comparing(Booking::getScheduledAt).reversed())
@@ -309,6 +325,67 @@ public class BookingServiceLayer {
     public BookingDtos.AppointmentResponse updateAppointmentStatus(Long bookingId, BookingStatus status) {
         updateStatus(bookingId, status);
         return appointmentDetail(bookingId);
+    }
+
+    @Transactional
+    public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request) {
+        Booking booking = findBooking(bookingId);
+        if (booking.getStatus() == BookingStatus.CANCELLED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
+        }
+        BookingPaymentMethod method = request.resolvedMethod();
+        booking.setPaymentMethod(method);
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
+        booking.setPaidAt(null);
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
+        String paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
+        String paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+        return new BookingDtos.PaymentResponse(
+                paymentUrl,
+                paymentId,
+                method.name().toLowerCase(java.util.Locale.ROOT),
+                booking.getFinalAmount(),
+                expiresAt);
+    }
+
+    @Transactional
+    public BookingDtos.AppointmentResponse updatePaymentStatus(
+            Long bookingId, BookingDtos.UpdatePaymentStatusRequest request) {
+        Booking booking = findBooking(bookingId);
+        BookingPaymentStatus status = request == null
+                ? BookingPaymentStatus.PAID
+                : request.resolvedPaymentStatus();
+        BookingPaymentMethod method = request == null
+                ? booking.getPaymentMethod()
+                : request.resolvedPaymentMethod(booking.getPaymentMethod());
+        booking.setPaymentMethod(method);
+        booking.setPaymentStatus(status);
+        booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        return BookingDtos.AppointmentResponse.from(booking);
+    }
+
+    @Transactional
+    public BookingDtos.AppointmentResponse assignStaff(Long bookingId, BookingDtos.AssignStaffRequest request) {
+        Booking booking = findBooking(bookingId);
+        User staff = userRepository
+                .findById(request.staffId())
+                .filter(user -> user.isActive() && user.getRole() == UserRole.ROLE_STAFF)
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Assigned staff is not available"));
+        booking.setAssignedStaff(staff);
+        return BookingDtos.AppointmentResponse.from(booking);
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public BookingDtos.AppointmentResponse reschedule(Long bookingId, BookingDtos.RescheduleRequest request) {
+        Booking booking = findBooking(bookingId);
+        if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
+        }
+        int requiredSlots = slotsForDuration(totalDuration(booking));
+        validateBookingEndTime(request.scheduledAt(), requiredSlots);
+        validateNoOverlappingBooking(request.scheduledAt(), requiredSlots, booking.getId());
+        booking.setScheduledAt(request.scheduledAt());
+        return BookingDtos.AppointmentResponse.from(booking);
     }
 
     private void validateStatusTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
@@ -422,16 +499,27 @@ public class BookingServiceLayer {
     }
 
     private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots) {
+        validateNoOverlappingBooking(scheduledAt, requiredSlots, null);
+    }
+
+    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots, Long ignoredBookingId) {
         LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
         boolean overlaps = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(
                         scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
                 .stream()
+                .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
                 .filter(existing -> OCCUPIED_STATUSES.contains(existing.getStatus()))
                 .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
         if (overlaps) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot overlaps an existing booking");
         }
+    }
+
+    private Booking findBooking(Long bookingId) {
+        return bookingRepository
+                .findById(bookingId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
     }
 
     private Stream<LocalDateTime> occupiedSlots(Booking booking) {

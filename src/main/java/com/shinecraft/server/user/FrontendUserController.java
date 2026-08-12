@@ -44,7 +44,7 @@ public class FrontendUserController {
 
     @GetMapping("/api/users/staffs")
     ApiListResponse<UserAdminDtos.UserSearchResponse> staffs() {
-        return ApiListResponse.ok("Staffs retrieved successfully", List.of());
+        return ApiListResponse.ok("Staffs retrieved successfully", userAdminService.search(null, UserRole.ROLE_STAFF, true));
     }
 
     @GetMapping("/api/users/staffs/workload")

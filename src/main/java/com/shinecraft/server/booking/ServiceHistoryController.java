@@ -164,7 +164,9 @@ public class ServiceHistoryController {
                             BookingDtos.toFrontendStatus(booking.getStatus()),
                             booking.getScheduledAt(),
                             booking.getCompletedAt(),
-                            booking.getStatus() == BookingStatus.CANCELLED ? "cancelled" : "unpaid"),
+                            booking.getStatus() == BookingStatus.CANCELLED
+                                    ? "cancelled"
+                                    : booking.getPaymentStatus().name().toLowerCase(java.util.Locale.ROOT)),
                     booking.getServices().stream()
                             .map(service -> new ServiceHistoryServiceSnapshot(
                                     String.valueOf(service.getService().getId()),
@@ -175,7 +177,11 @@ public class ServiceHistoryController {
                     booking.getFinalAmount(),
                     booking.getServices().stream().mapToInt(BookingService::getDurationMinutes).sum(),
                     booking.getCompletedAt() == null ? booking.getScheduledAt() : booking.getCompletedAt(),
-                    null,
+                    booking.getAssignedStaff() == null ? null : new ServiceHistoryUserSummary(
+                            String.valueOf(booking.getAssignedStaff().getId()),
+                            booking.getAssignedStaff().getFullName(),
+                            booking.getAssignedStaff().getPhone(),
+                            UserDtos.toFrontendRole(booking.getAssignedStaff().getRole())),
                     booking.getNote(),
                     null,
                     true,

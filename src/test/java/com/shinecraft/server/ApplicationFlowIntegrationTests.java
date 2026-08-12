@@ -34,6 +34,7 @@ import com.shinecraft.server.loyalty.RewardType;
 import com.shinecraft.server.promotion.PromotionRepository;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
+import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.math.BigDecimal;
@@ -560,6 +561,88 @@ class ApplicationFlowIntegrationTests {
                 .isEqualTo(1);
     }
 
+    @Test
+    void customerCanCreatePaymentAndAdminCanConfirmPaymentStatus() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(customer, null);
+
+        mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "method": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.data.paymentUrl", notNullValue()))
+                .andExpect(jsonPath("$.data.paymentId", notNullValue()))
+                .andExpect(jsonPath("$.data.method", is("vnpay")))
+                .andExpect(jsonPath("$.data.amount", notNullValue()));
+
+        mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "paymentStatus": "paid",
+                                  "paymentMethod": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.paymentStatus", is("paid")))
+                .andExpect(jsonPath("$.data.paymentMethod", is("vnpay")));
+    }
+
+    @Test
+    void adminCanAssignStaffAndStaffCanSeeAssignedAppointment() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        String staffToken = loginStaff();
+        User staff = firstActiveStaff();
+        Long bookingId = createBooking(customer, null);
+
+        mockMvc.perform(patch("/api/appointments/{id}/assign-staff", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "staffId": %d
+                                }
+                                """
+                                .formatted(staff.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.assignedStaffId._id", is(String.valueOf(staff.getId()))))
+                .andExpect(jsonPath("$.data.assignedStaffId.role", is("staff")));
+
+        mockMvc.perform(get("/api/appointments/staff/my")
+                        .header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*]._id", hasItem(String.valueOf(bookingId))));
+    }
+
+    @Test
+    void adminCanRescheduleAppointment() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(customer, null);
+        LocalDateTime newSlot = nextSlot();
+
+        mockMvc.perform(patch("/api/appointments/{id}/reschedule", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "scheduledAt": "%s"
+                                }
+                                """
+                                .formatted(newSlot)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scheduledAt", is(newSlot.format(JSON_DATE_TIME))));
+    }
+
     private CustomerContext registerCustomer() throws Exception {
         int unique = SEQUENCE.getAndIncrement();
         String phone = "09" + unique;
@@ -606,6 +689,20 @@ class ApplicationFlowIntegrationTests {
                                 {
                                   "phone": "0900000000",
                                   "password": "Admin@123456"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        return JsonPath.read(result.getResponse().getContentAsString(), "$.data.token");
+    }
+
+    private String loginStaff() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "phone": "0987654321",
+                                  "password": "Staff@123456"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -678,10 +775,17 @@ class ApplicationFlowIntegrationTests {
                 .orElseThrow(() -> new AssertionError("Seed data should include at least one active service"));
     }
 
+    private User firstActiveStaff() {
+        return userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Seed data should include at least one active staff"));
+    }
+
     private LocalDateTime nextSlot() {
         int index = SLOT_SEQUENCE.getAndIncrement();
-        LocalDate date = LocalDate.now().plusDays(1 + (index / 18));
-        LocalTime time = LocalTime.of(8, 0).plusMinutes((long) (index % 18) * 30);
+        LocalDate date = LocalDate.now().plusDays(1 + (index / 4));
+        LocalTime time = LocalTime.of(8, 0).plusMinutes((long) (index % 4) * 120);
         return date.atTime(time);
     }
 

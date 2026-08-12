@@ -44,6 +44,10 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "vehicle_id")
     private Vehicle vehicle;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_staff_id")
+    private User assignedStaff;
+
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
 
@@ -65,6 +69,16 @@ public class Booking extends BaseEntity {
 
     @Column(nullable = false)
     private Integer earnedPoints = 0;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private BookingPaymentMethod paymentMethod = BookingPaymentMethod.CASH;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private BookingPaymentStatus paymentStatus = BookingPaymentStatus.UNPAID;
+
+    private LocalDateTime paidAt;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")

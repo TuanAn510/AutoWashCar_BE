@@ -21,6 +21,8 @@ import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
+import com.shinecraft.server.user.UserRepository;
+import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.time.LocalDate;
@@ -40,6 +42,7 @@ class BookingServiceLayerTest {
     private LoyaltyService loyaltyService;
     private PromotionService promotionService;
     private AuthService authService;
+    private UserRepository userRepository;
     private BookingServiceLayer bookingService;
     private User customer;
     private LoyaltyAccount account;
@@ -52,6 +55,7 @@ class BookingServiceLayerTest {
         loyaltyService = mock(LoyaltyService.class);
         promotionService = mock(PromotionService.class);
         authService = mock(AuthService.class);
+        userRepository = mock(UserRepository.class);
         bookingService = new BookingServiceLayer(
                 bookingRepository,
                 vehicleRepository,
@@ -60,6 +64,7 @@ class BookingServiceLayerTest {
                 loyaltyService,
                 promotionService,
                 authService,
+                userRepository,
                 10000);
 
         customer = new User();
@@ -371,6 +376,74 @@ class BookingServiceLayerTest {
 
         assertThat(response.status()).isEqualTo(BookingStatus.IN_QUEUE);
         assertThat(booking.getCheckInAt()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void createPaymentStoresPendingPaymentMethodAndReturnsPaymentDetails() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setId(99L);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.PaymentResponse response = bookingService.createPayment(
+                99L, new BookingDtos.CreatePaymentRequest("vnpay"));
+
+        assertThat(booking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.VNPAY);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
+        assertThat(response.method()).isEqualTo("vnpay");
+        assertThat(response.paymentUrl()).contains("/appointments/99/payment/confirm");
+        assertThat(response.amount()).isEqualByComparingTo("10000");
+    }
+
+    @Test
+    void updatePaymentStatusMarksAppointmentPaid() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        booking.setPaymentMethod(BookingPaymentMethod.MOMO);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.AppointmentResponse response = bookingService.updatePaymentStatus(
+                99L, new BookingDtos.UpdatePaymentStatusRequest("paid", null));
+
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getPaidAt()).isNotNull();
+        assertThat(response.paymentStatus()).isEqualTo("paid");
+        assertThat(response.paymentMethod()).isEqualTo("momo");
+    }
+
+    @Test
+    void assignStaffStoresActiveStaffMember() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        User staff = new User();
+        staff.setId(7L);
+        staff.setFullName("Staff Member");
+        staff.setPhone("0987654321");
+        staff.setRole(UserRole.ROLE_STAFF);
+        staff.setActive(true);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(staff));
+
+        BookingDtos.AppointmentResponse response = bookingService.assignStaff(
+                99L, new BookingDtos.AssignStaffRequest(7L));
+
+        assertThat(booking.getAssignedStaff()).isEqualTo(staff);
+        assertThat(((BookingDtos.AppointmentUser) response.assignedStaffId()).uid()).isEqualTo("7");
+    }
+
+    @Test
+    void rescheduleUpdatesScheduledAtWhenSlotIsAvailable() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        booking.setScheduledAt(LocalDate.now().plusDays(1).atTime(9, 0));
+        BookingService item = new BookingService();
+        item.setDurationMinutes(30);
+        booking.addService(item);
+        LocalDateTime newSlot = LocalDate.now().plusDays(1).atTime(10, 0);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        BookingDtos.AppointmentResponse response = bookingService.reschedule(
+                99L, new BookingDtos.RescheduleRequest(newSlot));
+
+        assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
+        assertThat(response.scheduledAt()).isEqualTo(newSlot);
     }
 
     @Test

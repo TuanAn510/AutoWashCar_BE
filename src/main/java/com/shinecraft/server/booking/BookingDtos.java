@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 
 public final class BookingDtos {
     private BookingDtos() {}
@@ -60,6 +61,39 @@ public final class BookingDtos {
     public record SlotResponse(LocalDateTime startAt, boolean available, String reason) {}
 
     public record AvailabilityResponse(String date, Integer bookingWindowDays, List<SlotResponse> slots) {}
+
+    public record CreatePaymentRequest(@NotNull String method) {
+        public BookingPaymentMethod resolvedMethod() {
+            return parsePaymentMethod(method);
+        }
+    }
+
+    public record PaymentResponse(
+            String paymentUrl,
+            String paymentId,
+            String method,
+            BigDecimal amount,
+            LocalDateTime expiresAt) {}
+
+    public record UpdatePaymentStatusRequest(String paymentStatus, String paymentMethod) {
+        public BookingPaymentStatus resolvedPaymentStatus() {
+            if (paymentStatus == null || paymentStatus.isBlank()) {
+                return BookingPaymentStatus.PAID;
+            }
+            return BookingPaymentStatus.valueOf(normalizeEnum(paymentStatus));
+        }
+
+        public BookingPaymentMethod resolvedPaymentMethod(BookingPaymentMethod fallback) {
+            if (paymentMethod == null || paymentMethod.isBlank()) {
+                return fallback;
+            }
+            return parsePaymentMethod(paymentMethod);
+        }
+    }
+
+    public record AssignStaffRequest(@NotNull Long staffId) {}
+
+    public record RescheduleRequest(@NotNull @Future LocalDateTime scheduledAt) {}
 
     public record BookingServiceResponse(Long serviceId, String serviceName, BigDecimal price, Integer durationMinutes) {
         public static BookingServiceResponse from(BookingService service) {
@@ -175,11 +209,15 @@ public final class BookingDtos {
                             booking.getVehicle().getLicensePlate(),
                             booking.getVehicle().getManufactureYear(),
                             "sedan"),
-                    null,
+                    booking.getAssignedStaff() == null ? null : new AppointmentUser(
+                            String.valueOf(booking.getAssignedStaff().getId()),
+                            booking.getAssignedStaff().getFullName(),
+                            booking.getAssignedStaff().getPhone(),
+                            toFrontendRole(booking.getAssignedStaff().getRole())),
                     null,
                     booking.getServices().stream()
                             .map(service -> new AppointmentServiceSnapshot(
-                                    String.valueOf(service.getService().getId()),
+                                    service.getService() == null ? null : String.valueOf(service.getService().getId()),
                                     service.getServiceName(),
                                     service.getPrice(),
                                     service.getDurationMinutes()))
@@ -192,8 +230,10 @@ public final class BookingDtos {
                     booking.getDiscountAmount(),
                     booking.getFinalAmount(),
                     booking.getFinalAmount(),
-                    "cash",
-                    booking.getStatus() == BookingStatus.CANCELLED ? "cancelled" : "unpaid",
+                    booking.getPaymentMethod().name().toLowerCase(Locale.ROOT),
+                    booking.getStatus() == BookingStatus.CANCELLED
+                            ? "cancelled"
+                            : booking.getPaymentStatus().name().toLowerCase(Locale.ROOT),
                     null,
                     booking.getStatus() == BookingStatus.CANCELLED ? booking.getUpdatedAt() : null,
                     booking.getCompletedAt(),
@@ -242,5 +282,13 @@ public final class BookingDtos {
             case ROLE_STAFF -> "staff";
             case ROLE_CUSTOMER -> "customer";
         };
+    }
+
+    private static BookingPaymentMethod parsePaymentMethod(String value) {
+        return BookingPaymentMethod.valueOf(normalizeEnum(value));
+    }
+
+    private static String normalizeEnum(String value) {
+        return value.trim().replace('-', '_').toUpperCase(Locale.ROOT);
     }
 }

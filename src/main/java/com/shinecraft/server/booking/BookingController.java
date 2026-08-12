@@ -6,7 +6,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -52,7 +51,11 @@ public class BookingController {
 
     @GetMapping("/api/appointments/staff/my")
     ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> myStaffAppointments() {
-        return appointments();
+        List<BookingDtos.AppointmentResponse> appointments = bookingService.myStaffAppointments();
+        return ApiSummaryListResponse.ok(
+                "My staff appointments retrieved successfully",
+                appointments,
+                summarizeAppointmentResponses(appointments));
     }
 
     @GetMapping("/api/appointments")
@@ -92,18 +95,27 @@ public class BookingController {
     }
 
     @PatchMapping("/api/appointments/{id}/payment-status")
-    ApiResponse<BookingDtos.AppointmentResponse> updatePaymentStatus(@PathVariable Long id) {
-        return ApiResponse.ok("Payment status updated successfully", bookingService.appointmentDetail(id));
+    ApiResponse<BookingDtos.AppointmentResponse> updatePaymentStatus(
+            @PathVariable Long id, @RequestBody(required = false) BookingDtos.UpdatePaymentStatusRequest request) {
+        return ApiResponse.ok("Payment status updated successfully", bookingService.updatePaymentStatus(id, request));
+    }
+
+    @PostMapping("/api/appointments/{id}/payment")
+    ApiResponse<BookingDtos.PaymentResponse> createPayment(
+            @PathVariable Long id, @Valid @RequestBody BookingDtos.CreatePaymentRequest request) {
+        return ApiResponse.ok("Payment created successfully", bookingService.createPayment(id, request));
     }
 
     @PatchMapping("/api/appointments/{id}/assign-staff")
-    ApiResponse<BookingDtos.AppointmentResponse> assignStaff(@PathVariable Long id) {
-        return ApiResponse.ok("Staff assigned successfully", bookingService.appointmentDetail(id));
+    ApiResponse<BookingDtos.AppointmentResponse> assignStaff(
+            @PathVariable Long id, @Valid @RequestBody BookingDtos.AssignStaffRequest request) {
+        return ApiResponse.ok("Staff assigned successfully", bookingService.assignStaff(id, request));
     }
 
     @PatchMapping("/api/appointments/{id}/reschedule")
-    ApiResponse<BookingDtos.AppointmentResponse> reschedule(@PathVariable Long id, @RequestBody Map<String, String> request) {
-        return ApiResponse.ok("Appointment rescheduled successfully", bookingService.appointmentDetail(id));
+    ApiResponse<BookingDtos.AppointmentResponse> reschedule(
+            @PathVariable Long id, @Valid @RequestBody BookingDtos.RescheduleRequest request) {
+        return ApiResponse.ok("Appointment rescheduled successfully", bookingService.reschedule(id, request));
     }
 
     @GetMapping("/api/bookings/availability")
