@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -88,11 +89,41 @@ public class BookingServiceLayer {
         validateBookingWindow(request.scheduledAt(), account);
         validateBookableSlot(request.scheduledAt());
 
-        List<CarWashService> selectedServices = serviceRepository.findAllById(request.serviceIds());
-        if (selectedServices.size() != request.serviceIds().size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
+        List<Long> requestedServiceIds = request.resolvedServiceIds();
+        if (requestedServiceIds.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "At least one service is required");
+        }
+        List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(requestedServiceIds));
+        if (selectedServices.size() != requestedServiceIds.size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
-        int requiredSlots = slotsForDuration(totalDuration(selectedServices));
+
+        RewardRedemption redemption = null;
+        CarWashService freeAddOnService = null;
+        if (request.rewardRedemptionId() != null) {
+            redemption = redemptionRepository
+                    .findByIdAndCustomerAndStatus(
+                            request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
+            if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(LocalDateTime.now())) {
+                redemption.setStatus(RewardRedemptionStatus.EXPIRED);
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
+            }
+            Reward reward = redemption.getReward();
+            if (reward.getRewardType() == RewardType.ADD_ON) {
+                CarWashService addOn = requireActiveAddOnService(reward);
+                boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
+                if (!alreadySelected) {
+                    freeAddOnService = addOn;
+                }
+            }
+        }
+
+        List<CarWashService> bookedServices = new ArrayList<>(selectedServices);
+        if (freeAddOnService != null) {
+            bookedServices.add(freeAddOnService);
+        }
+        int requiredSlots = slotsForDuration(totalDuration(bookedServices));
         validateBookingEndTime(request.scheduledAt(), requiredSlots);
         validateNoOverlappingBooking(request.scheduledAt(), requiredSlots);
 
@@ -111,13 +142,17 @@ public class BookingServiceLayer {
             discount = discount.add(discountForPromotion(subtotal.subtract(discount), promotion));
         }
 
-        RewardRedemption redemption = null;
-        if (request.rewardRedemptionId() != null) {
-            redemption = redemptionRepository
-                    .findByIdAndCustomerAndStatus(
-                            request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
-                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
-            discount = discount.add(discountForReward(subtotal.subtract(discount), redemption.getReward()));
+        if (redemption != null) {
+            Reward reward = redemption.getReward();
+            if (reward.getRewardType() == RewardType.ADD_ON) {
+                CarWashService addOn = requireActiveAddOnService(reward);
+                boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
+                if (alreadySelected) {
+                    discount = discount.add(addOn.getPrice().min(subtotal.subtract(discount)));
+                }
+            } else {
+                discount = discount.add(discountForReward(subtotal.subtract(discount), reward));
+            }
             redemption.setStatus(RewardRedemptionStatus.USED);
             redemption.setUsedAt(LocalDateTime.now());
         }
@@ -138,16 +173,18 @@ public class BookingServiceLayer {
         booking.setPromotion(promotion);
         booking.setRewardRedemption(redemption);
         booking.setNote(request.note());
-        selectedServices.forEach(service -> {
-            BookingService item = new BookingService();
-            item.setService(service);
-            item.setServiceName(service.getName());
-            item.setPrice(service.getPrice());
-            item.setDurationMinutes(service.getDurationMinutes());
-            booking.addService(item);
-        });
+        selectedServices.forEach(service -> addBookingService(booking, service, service.getPrice()));
+        if (freeAddOnService != null) {
+            addBookingService(booking, freeAddOnService, BigDecimal.ZERO);
+        }
 
         return BookingDtos.BookingResponse.from(bookingRepository.save(booking));
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public BookingDtos.AppointmentResponse createAppointment(BookingDtos.CreateBookingRequest request) {
+        BookingDtos.BookingResponse created = create(request);
+        return appointmentDetail(created.id());
     }
 
     @Transactional(readOnly = true)
@@ -155,6 +192,29 @@ public class BookingServiceLayer {
         return bookingRepository.findByCustomerOrderByScheduledAtDesc(authService.currentUser()).stream()
                 .map(BookingDtos.BookingResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<BookingDtos.AppointmentResponse> myAppointments() {
+        return bookingRepository.findByCustomerOrderByScheduledAtDesc(authService.currentUser()).stream()
+                .map(BookingDtos.AppointmentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<BookingDtos.AppointmentResponse> allAppointments() {
+        return bookingRepository.findAll().stream()
+                .sorted(Comparator.comparing(Booking::getScheduledAt).reversed())
+                .map(BookingDtos.AppointmentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BookingDtos.AppointmentResponse appointmentDetail(Long bookingId) {
+        Booking booking = bookingRepository
+                .findById(bookingId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+        return BookingDtos.AppointmentResponse.from(booking);
     }
 
     @Transactional(readOnly = true)
@@ -243,6 +303,12 @@ public class BookingServiceLayer {
             }
         }
         return BookingDtos.BookingResponse.from(booking);
+    }
+
+    @Transactional
+    public BookingDtos.AppointmentResponse updateAppointmentStatus(Long bookingId, BookingStatus status) {
+        updateStatus(bookingId, status);
+        return appointmentDetail(bookingId);
     }
 
     private void validateStatusTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
@@ -424,6 +490,23 @@ public class BookingServiceLayer {
             return reward.getDiscountAmount().min(base);
         }
         return BigDecimal.ZERO;
+    }
+
+    private CarWashService requireActiveAddOnService(Reward reward) {
+        CarWashService addOn = reward.getAddOnService();
+        if (addOn == null || !addOn.isActive()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward add-on service is not available");
+        }
+        return addOn;
+    }
+
+    private void addBookingService(Booking booking, CarWashService service, BigDecimal price) {
+        BookingService item = new BookingService();
+        item.setService(service);
+        item.setServiceName(service.getName());
+        item.setPrice(price);
+        item.setDurationMinutes(service.getDurationMinutes());
+        booking.addService(item);
     }
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {

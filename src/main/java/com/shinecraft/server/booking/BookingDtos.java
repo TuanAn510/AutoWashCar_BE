@@ -1,7 +1,8 @@
 package com.shinecraft.server.booking;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shinecraft.server.user.UserRole;
 import jakarta.validation.constraints.Future;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
@@ -13,13 +14,48 @@ public final class BookingDtos {
 
     public record CreateBookingRequest(
             @NotNull Long vehicleId,
-            @NotEmpty List<Long> serviceIds,
+            List<Long> serviceIds,
+            List<ServiceRef> services,
             @NotNull @Future LocalDateTime scheduledAt,
             Long promotionId,
             Long rewardRedemptionId,
-            @Size(max = 1000) String note) {}
+            @Size(max = 1000) String note) {
+        public CreateBookingRequest(
+                Long vehicleId,
+                List<Long> serviceIds,
+                LocalDateTime scheduledAt,
+                Long promotionId,
+                Long rewardRedemptionId,
+                String note) {
+            this(vehicleId, serviceIds, null, scheduledAt, promotionId, rewardRedemptionId, note);
+        }
 
-    public record UpdateStatusRequest(@NotNull BookingStatus status) {}
+        public List<Long> resolvedServiceIds() {
+            if (serviceIds != null && !serviceIds.isEmpty()) {
+                return serviceIds;
+            }
+            if (services == null) {
+                return List.of();
+            }
+            return services.stream().map(ServiceRef::serviceId).toList();
+        }
+    }
+
+    public record ServiceRef(@NotNull Long serviceId) {}
+
+    public record UpdateStatusRequest(@JsonProperty("status") String statusValue) {
+        public UpdateStatusRequest(BookingStatus status) {
+            this(status == null ? null : status.name());
+        }
+
+        public BookingStatus status() {
+            return resolvedStatus();
+        }
+
+        public BookingStatus resolvedStatus() {
+            return BookingStatus.valueOf(statusValue.trim().toUpperCase());
+        }
+    }
 
     public record SlotResponse(LocalDateTime startAt, boolean available, String reason) {}
 
@@ -79,4 +115,131 @@ public final class BookingDtos {
             Long waitingMinutes,
             Integer serviceDurationMinutes,
             Integer position) {}
+
+    public record AppointmentUser(
+            @JsonProperty("_id") String uid,
+            String displayName,
+            String phone,
+            String role) {}
+
+    public record AppointmentVehicle(
+            @JsonProperty("_id") String uid,
+            String brand,
+            String model,
+            String licensePlate,
+            Integer year,
+            String carType) {}
+
+    public record AppointmentServiceSnapshot(
+            String serviceId,
+            String nameSnapshot,
+            BigDecimal priceSnapshot,
+            Integer estimatedDurationSnapshot) {}
+
+    public record AppointmentResponse(
+            @JsonProperty("_id") String uid,
+            AppointmentUser customerId,
+            AppointmentVehicle vehicleId,
+            Object assignedStaffId,
+            Object cancelledBy,
+            List<AppointmentServiceSnapshot> services,
+            LocalDateTime scheduledAt,
+            String note,
+            String status,
+            Integer totalEstimatedDuration,
+            BigDecimal subtotalPrice,
+            BigDecimal discountAmount,
+            BigDecimal totalPrice,
+            BigDecimal finalAmount,
+            String paymentMethod,
+            String paymentStatus,
+            String cancelReason,
+            LocalDateTime cancelledAt,
+            LocalDateTime completedAt,
+            Integer pointsEarned,
+            boolean isPointsAwarded,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt) {
+        public static AppointmentResponse from(Booking booking) {
+            return new AppointmentResponse(
+                    String.valueOf(booking.getId()),
+                    new AppointmentUser(
+                            String.valueOf(booking.getCustomer().getId()),
+                            booking.getCustomer().getFullName(),
+                            booking.getCustomer().getPhone(),
+                            toFrontendRole(booking.getCustomer().getRole())),
+                    new AppointmentVehicle(
+                            String.valueOf(booking.getVehicle().getId()),
+                            booking.getVehicle().getBrand(),
+                            booking.getVehicle().getModel(),
+                            booking.getVehicle().getLicensePlate(),
+                            booking.getVehicle().getManufactureYear(),
+                            "sedan"),
+                    null,
+                    null,
+                    booking.getServices().stream()
+                            .map(service -> new AppointmentServiceSnapshot(
+                                    String.valueOf(service.getService().getId()),
+                                    service.getServiceName(),
+                                    service.getPrice(),
+                                    service.getDurationMinutes()))
+                            .toList(),
+                    booking.getScheduledAt(),
+                    booking.getNote(),
+                    toFrontendStatus(booking.getStatus()),
+                    booking.getServices().stream().mapToInt(BookingService::getDurationMinutes).sum(),
+                    booking.getSubtotalAmount(),
+                    booking.getDiscountAmount(),
+                    booking.getFinalAmount(),
+                    booking.getFinalAmount(),
+                    "cash",
+                    booking.getStatus() == BookingStatus.CANCELLED ? "cancelled" : "unpaid",
+                    null,
+                    booking.getStatus() == BookingStatus.CANCELLED ? booking.getUpdatedAt() : null,
+                    booking.getCompletedAt(),
+                    booking.getEarnedPoints(),
+                    booking.getEarnedPoints() != null && booking.getEarnedPoints() > 0,
+                    booking.getCreatedAt(),
+                    booking.getUpdatedAt());
+        }
+    }
+
+    public record AppointmentStatusSummary(
+            long total,
+            long pending,
+            long confirmed,
+            long inProgress,
+            long completed,
+            long cancelled) {
+        public static AppointmentStatusSummary from(List<Booking> bookings) {
+            return new AppointmentStatusSummary(
+                    bookings.size(),
+                    count(bookings, BookingStatus.PENDING),
+                    count(bookings, BookingStatus.CONFIRMED),
+                    count(bookings, BookingStatus.IN_PROGRESS) + count(bookings, BookingStatus.IN_QUEUE),
+                    count(bookings, BookingStatus.COMPLETED),
+                    count(bookings, BookingStatus.CANCELLED));
+        }
+
+        private static long count(List<Booking> bookings, BookingStatus status) {
+            return bookings.stream().filter(booking -> booking.getStatus() == status).count();
+        }
+    }
+
+    public static String toFrontendStatus(BookingStatus status) {
+        return switch (status) {
+            case PENDING -> "pending";
+            case CONFIRMED, IN_QUEUE -> "confirmed";
+            case IN_PROGRESS -> "in_progress";
+            case COMPLETED -> "completed";
+            case CANCELLED -> "cancelled";
+        };
+    }
+
+    private static String toFrontendRole(UserRole role) {
+        return switch (role) {
+            case ROLE_ADMIN -> "admin";
+            case ROLE_CUSTOMER -> "customer";
+        };
+    }
 }
