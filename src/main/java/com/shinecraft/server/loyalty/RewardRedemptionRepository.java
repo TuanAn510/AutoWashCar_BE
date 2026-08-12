@@ -9,6 +9,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface RewardRedemptionRepository extends JpaRepository<RewardRedemption, Long> {
     List<RewardRedemption> findByCustomerOrderByRedeemedAtDesc(User customer);
 
+    boolean existsByCustomerAndReward(User customer, Reward reward);
+
+    long countByReward(Reward reward);
+
     Optional<RewardRedemption> findByIdAndCustomerAndStatus(
             Long id, User customer, RewardRedemptionStatus status);
 

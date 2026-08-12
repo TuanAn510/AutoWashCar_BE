@@ -18,10 +18,37 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
             select coalesce(sum(transaction.points), 0)
             from LoyaltyTransaction transaction
             where transaction.customer = :customer
+              and transaction.type = :type
+            """)
+    Long sumPointsByType(@Param("customer") User customer, @Param("type") LoyaltyTransactionType type);
+
+    @Query("""
+            select coalesce(sum(transaction.points), 0)
+            from LoyaltyTransaction transaction
+            where transaction.customer = :customer
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
               and transaction.createdAt >= :since
             """)
     Long sumEarnedPointsSince(@Param("customer") User customer, @Param("since") LocalDateTime since);
+
+    @Query("""
+            select coalesce(sum(transaction.points), 0)
+            from LoyaltyTransaction transaction
+            where transaction.customer = :customer
+              and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
+              and transaction.createdAt >= :from
+              and transaction.createdAt < :to
+            """)
+    Long sumEarnedPointsBetween(
+            @Param("customer") User customer, @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    @Query("""
+            select max(transaction.createdAt)
+            from LoyaltyTransaction transaction
+            where transaction.customer = :customer
+              and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
+            """)
+    LocalDateTime lastEarnedAt(@Param("customer") User customer);
 
     @Query("""
             select coalesce(sum(transaction.booking.finalAmount), 0)

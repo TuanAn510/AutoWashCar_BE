@@ -131,6 +131,10 @@ CREATE TABLE rewards (
   required_points INT NOT NULL,
   reward_type VARCHAR(30) NOT NULL,
   discount_amount DECIMAL(12,2),
+  min_order_amount DECIMAL(12,2),
+  max_discount_amount DECIMAL(12,2),
+  quantity INT,
+  expired_at DATETIME2(6),
   add_on_service_id BIGINT,
   is_active BIT NOT NULL DEFAULT 1,
   created_at DATETIME2(6) NOT NULL,
@@ -138,7 +142,10 @@ CREATE TABLE rewards (
   CONSTRAINT fk_rewards_add_on_service FOREIGN KEY (add_on_service_id) REFERENCES services(id),
   CONSTRAINT chk_rewards_required_points CHECK (required_points > 0),
   CONSTRAINT chk_rewards_type CHECK (reward_type IN ('DISCOUNT_CODE', 'FREE_WASH', 'ADD_ON')),
-  CONSTRAINT chk_rewards_discount CHECK (discount_amount IS NULL OR discount_amount >= 0)
+  CONSTRAINT chk_rewards_discount CHECK (discount_amount IS NULL OR discount_amount >= 0),
+  CONSTRAINT chk_rewards_min_order_amount CHECK (min_order_amount IS NULL OR min_order_amount >= 0),
+  CONSTRAINT chk_rewards_max_discount_amount CHECK (max_discount_amount IS NULL OR max_discount_amount >= 0),
+  CONSTRAINT chk_rewards_quantity CHECK (quantity IS NULL OR quantity >= 0)
 );
 
 CREATE TABLE reward_redemptions (

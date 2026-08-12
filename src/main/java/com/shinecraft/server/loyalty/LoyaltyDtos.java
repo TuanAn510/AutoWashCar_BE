@@ -71,26 +71,43 @@ public final class LoyaltyDtos {
             Integer totalRedeemedPoints,
             Integer totalExpiredPoints,
             Integer currentQuarterEarnedPoints,
+            String loyaltyPeriodKey,
+            LocalDateTime nextQuarterResetAt,
             BigDecimal totalSpending,
             Integer visitCount,
             TierResponse tier,
             TierResponse membershipTierId,
+            LocalDateTime lastPointEarnedAt,
             LocalDateTime createdAt,
             LocalDateTime updatedAt) {
         public static LoyaltyAccountResponse from(LoyaltyAccount account) {
+            return from(account, 0, 0, account.getLifetimePoints(), null, null, null);
+        }
+
+        public static LoyaltyAccountResponse from(
+                LoyaltyAccount account,
+                Integer totalRedeemedPoints,
+                Integer totalExpiredPoints,
+                Integer currentQuarterEarnedPoints,
+                String loyaltyPeriodKey,
+                LocalDateTime nextQuarterResetAt,
+                LocalDateTime lastPointEarnedAt) {
             return new LoyaltyAccountResponse(
                     String.valueOf(account.getId()),
                     String.valueOf(account.getCustomer().getId()),
                     account.getCurrentPoints(),
                     account.getLifetimePoints(),
                     account.getLifetimePoints(),
-                    0,
-                    0,
-                    account.getLifetimePoints(),
+                    totalRedeemedPoints == null ? 0 : totalRedeemedPoints,
+                    totalExpiredPoints == null ? 0 : totalExpiredPoints,
+                    currentQuarterEarnedPoints == null ? 0 : currentQuarterEarnedPoints,
+                    loyaltyPeriodKey,
+                    nextQuarterResetAt,
                     account.getTotalSpending(),
                     account.getVisitCount(),
                     account.getMembershipTier() == null ? null : TierResponse.from(account.getMembershipTier()),
                     account.getMembershipTier() == null ? null : TierResponse.from(account.getMembershipTier()),
+                    lastPointEarnedAt,
                     account.getCreatedAt(),
                     account.getUpdatedAt());
         }
@@ -124,6 +141,10 @@ public final class LoyaltyDtos {
             String discountType,
             @DecimalMin("0.0") BigDecimal discountAmount,
             @DecimalMin("0.0") BigDecimal discountValue,
+            @DecimalMin("0.0") BigDecimal minOrderAmount,
+            @DecimalMin("0.0") BigDecimal maxDiscountAmount,
+            @Min(0) Integer quantity,
+            String expiredAt,
             Long addOnServiceId,
             Boolean active,
             Boolean isActive) {
@@ -150,12 +171,22 @@ public final class LoyaltyDtos {
             String discountType,
             BigDecimal discountAmount,
             BigDecimal discountValue,
+            BigDecimal minOrderAmount,
+            BigDecimal maxDiscountAmount,
+            Integer quantity,
+            Long redeemedCount,
+            Boolean hasRedeemed,
+            LocalDateTime expiredAt,
             Long addOnServiceId,
             boolean active,
             boolean isActive,
             LocalDateTime createdAt,
             LocalDateTime updatedAt) {
         public static RewardResponse from(Reward reward) {
+            return from(reward, 0L, false);
+        }
+
+        public static RewardResponse from(Reward reward, Long redeemedCount, Boolean hasRedeemed) {
             return new RewardResponse(
                     reward.getId(),
                     String.valueOf(reward.getId()),
@@ -166,6 +197,12 @@ public final class LoyaltyDtos {
                     "fixed_amount",
                     reward.getDiscountAmount(),
                     reward.getDiscountAmount(),
+                    reward.getMinOrderAmount(),
+                    reward.getMaxDiscountAmount(),
+                    reward.getQuantity(),
+                    redeemedCount == null ? 0L : redeemedCount,
+                    hasRedeemed != null && hasRedeemed,
+                    reward.getExpiredAt(),
                     reward.getAddOnService() == null ? null : reward.getAddOnService().getId(),
                     reward.isActive(),
                     reward.isActive(),

@@ -11,6 +11,9 @@ import com.shinecraft.server.user.UserRole;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,7 +100,7 @@ public class LoyaltyService {
 
     @Transactional(readOnly = true)
     public LoyaltyDtos.LoyaltyAccountResponse myAccount() {
-        return LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(authService.currentUser()));
+        return accountResponse(getOrCreateAccount(authService.currentUser()));
     }
 
     @Transactional(readOnly = true)
@@ -120,7 +123,7 @@ public class LoyaltyService {
 
                     Map<String, Object> item = new LinkedHashMap<>();
                     item.put("customer", customer);
-                    item.put("loyaltyAccount", LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(user)));
+                    item.put("loyaltyAccount", accountResponse(getOrCreateAccount(user)));
                     return item;
                 })
                 .toList();
@@ -132,7 +135,7 @@ public class LoyaltyService {
                 .findById(customerId)
                 .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
-        return LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(customer));
+        return accountResponse(getOrCreateAccount(customer));
     }
 
     @Transactional(readOnly = true)
@@ -156,7 +159,7 @@ public class LoyaltyService {
     @Transactional(readOnly = true)
     public List<LoyaltyDtos.RewardResponse> rewards() {
         return rewardRepository.findByIsActiveTrueOrderByRequiredPointsAsc().stream()
-                .map(LoyaltyDtos.RewardResponse::from)
+                .map(this::rewardResponse)
                 .toList();
     }
 
@@ -172,6 +175,10 @@ public class LoyaltyService {
         reward.setRequiredPoints(request.requiredPoints());
         reward.setRewardType(request.resolvedRewardType());
         reward.setDiscountAmount(request.resolvedDiscountAmount());
+        reward.setMinOrderAmount(request.minOrderAmount());
+        reward.setMaxDiscountAmount(request.maxDiscountAmount());
+        reward.setQuantity(request.quantity());
+        reward.setExpiredAt(parseExpiredAt(request.expiredAt()));
         if (request.addOnServiceId() != null) {
             CarWashService service = carWashServiceRepository
                     .findById(request.addOnServiceId())
@@ -183,7 +190,7 @@ public class LoyaltyService {
         if (request.resolvedActive() != null) {
             reward.setActive(request.resolvedActive());
         }
-        return LoyaltyDtos.RewardResponse.from(rewardRepository.save(reward));
+        return rewardResponse(rewardRepository.save(reward));
     }
 
     @Transactional
@@ -192,7 +199,7 @@ public class LoyaltyService {
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward not found"));
         reward.setActive(false);
-        return LoyaltyDtos.RewardResponse.from(rewardRepository.save(reward));
+        return rewardResponse(rewardRepository.save(reward));
     }
 
     @Transactional
@@ -203,6 +210,7 @@ public class LoyaltyService {
                 .filter(Reward::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward is not available"));
         LoyaltyAccount account = getOrCreateAccountForUpdate(customer);
+        validateRewardRedeemable(customer, reward);
         if (account.getCurrentPoints() < reward.getRequiredPoints()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Not enough points to redeem this reward");
         }
@@ -243,6 +251,14 @@ public class LoyaltyService {
         RewardRedemption redemption = redemptionRepository
                 .findById(redemptionId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward redemption not found"));
+        if (redemption.getStatus() != RewardRedemptionStatus.AVAILABLE) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available");
+        }
+        if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(LocalDateTime.now())) {
+            redemption.setStatus(RewardRedemptionStatus.EXPIRED);
+            redemptionRepository.save(redemption);
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
+        }
         redemption.setStatus(RewardRedemptionStatus.USED);
         redemption.setUsedAt(LocalDateTime.now());
         return LoyaltyDtos.RedemptionResponse.from(redemptionRepository.save(redemption));
@@ -357,6 +373,80 @@ public class LoyaltyService {
             return accountRepository.save(account);
         });
     }
+
+    private LoyaltyDtos.LoyaltyAccountResponse accountResponse(LoyaltyAccount account) {
+        QuarterWindow quarter = currentQuarter(LocalDate.now());
+        User customer = account.getCustomer();
+        int totalRedeemed = positivePoints(customer, LoyaltyTransactionType.REDEEM);
+        int totalExpired = positivePoints(customer, LoyaltyTransactionType.EXPIRE);
+        int currentQuarterEarned = Math.toIntExact(transactionRepository.sumEarnedPointsBetween(
+                customer, quarter.start().atStartOfDay(), quarter.nextStart().atStartOfDay()));
+        return LoyaltyDtos.LoyaltyAccountResponse.from(
+                account,
+                totalRedeemed,
+                totalExpired,
+                currentQuarterEarned,
+                quarter.periodKey(),
+                quarter.nextStart().atStartOfDay(),
+                transactionRepository.lastEarnedAt(customer));
+    }
+
+    private int positivePoints(User customer, LoyaltyTransactionType type) {
+        long total = transactionRepository.sumPointsByType(customer, type);
+        return Math.toIntExact(Math.abs(total));
+    }
+
+    private LoyaltyDtos.RewardResponse rewardResponse(Reward reward) {
+        User currentUser = authService.currentUser();
+        boolean hasRedeemed = currentUser.getRole() == UserRole.ROLE_CUSTOMER
+                && redemptionRepository.existsByCustomerAndReward(currentUser, reward);
+        return LoyaltyDtos.RewardResponse.from(reward, redemptionRepository.countByReward(reward), hasRedeemed);
+    }
+
+    private void validateRewardRedeemable(User customer, Reward reward) {
+        LocalDateTime now = LocalDateTime.now();
+        if (reward.getExpiredAt() != null && !reward.getExpiredAt().isAfter(now)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward has expired");
+        }
+        if (reward.getQuantity() != null && redemptionRepository.countByReward(reward) >= reward.getQuantity()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward is out of stock");
+        }
+        if (redemptionRepository.existsByCustomerAndReward(customer, reward)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward has already been redeemed");
+        }
+    }
+
+    private LocalDateTime parseExpiredAt(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String trimmed = value.trim();
+        try {
+            return LocalDateTime.parse(trimmed);
+        } catch (DateTimeParseException ignored) {
+            // Frontend date inputs may arrive as ISO timestamps with an offset.
+        }
+        try {
+            return OffsetDateTime.parse(trimmed).toLocalDateTime();
+        } catch (DateTimeParseException ignored) {
+            // Date-only payloads are accepted as end-of-day expirations.
+        }
+        try {
+            return LocalDate.parse(trimmed).atTime(LocalTime.MAX);
+        } catch (DateTimeParseException exception) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward expiration date is invalid");
+        }
+    }
+
+    private QuarterWindow currentQuarter(LocalDate date) {
+        int quarterIndex = (date.getMonthValue() - 1) / 3;
+        int quarterStartMonth = quarterIndex * 3 + 1;
+        LocalDate start = LocalDate.of(date.getYear(), quarterStartMonth, 1);
+        LocalDate nextStart = start.plusMonths(3);
+        return new QuarterWindow(start, nextStart, date.getYear() + "-Q" + (quarterIndex + 1));
+    }
+
+    private record QuarterWindow(LocalDate start, LocalDate nextStart, String periodKey) {}
 
     private void useOldestPointLots(User customer, int points) {
         int remaining = points;

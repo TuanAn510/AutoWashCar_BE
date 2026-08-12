@@ -370,6 +370,119 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void loyaltyAccountStatsReflectEarnRedeemAndExpireLedger() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Reward reward = createReward("Stats reward", RewardType.DISCOUNT_CODE, null, "1000");
+
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(100000), 10, "Stats test points", null);
+        redeemReward(customer, reward);
+        loyaltyService.expireOldPoints(LocalDateTime.now().plusYears(2));
+
+        mockMvc.perform(get("/api/loyalty/me").header("Authorization", bearer(customer.token())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.currentPoints", is(0)))
+                .andExpect(jsonPath("$.data.totalEarnedPoints", is(10)))
+                .andExpect(jsonPath("$.data.totalRedeemedPoints", is(1)))
+                .andExpect(jsonPath("$.data.totalExpiredPoints", is(9)))
+                .andExpect(jsonPath("$.data.currentQuarterEarnedPoints", is(10)))
+                .andExpect(jsonPath("$.data.loyaltyPeriodKey", notNullValue()))
+                .andExpect(jsonPath("$.data.nextQuarterResetAt", notNullValue()))
+                .andExpect(jsonPath("$.data.lastPointEarnedAt", notNullValue()));
+    }
+
+    @Test
+    void customerCannotManageLoyaltyCatalogOrUseRedemptionEndpoint() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Reward reward = createReward("Protected reward", RewardType.DISCOUNT_CODE, null, "1000");
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(100000), 10, "Protected test points", null);
+        Long redemptionId = redeemReward(customer, reward);
+
+        mockMvc.perform(get("/api/loyalty/customers").header("Authorization", bearer(customer.token())))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/membership-tiers")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "Customer blocked tier",
+                                  "minTotalEarnedPoints": 10,
+                                  "discountPercent": 1,
+                                  "bookingWindowDays": 7,
+                                  "priorityLevel": 1,
+                                  "isActive": true
+                                }
+                                """))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/rewards")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "Customer blocked reward",
+                                  "requiredPoints": 1,
+                                  "discountType": "fixed_amount",
+                                  "discountValue": 1000,
+                                  "isActive": true
+                                }
+                                """))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(patch("/api/rewards/redemptions/{redemptionId}/use", redemptionId)
+                        .header("Authorization", bearer(customer.token())))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminCanManageRewardContractAndStaffCanMarkRedemptionUsed() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        String staffToken = loginStaff();
+
+        MvcResult rewardResult = mockMvc.perform(post("/api/rewards")
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "Contract reward",
+                                  "description": "Reward with frontend contract fields",
+                                  "requiredPoints": 1,
+                                  "discountType": "fixed_amount",
+                                  "discountValue": 1000,
+                                  "minOrderAmount": 5000,
+                                  "maxDiscountAmount": 1000,
+                                  "quantity": 1,
+                                  "expiredAt": "%s",
+                                  "isActive": true
+                                }
+                                """
+                                .formatted(LocalDateTime.now().plusDays(1))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.minOrderAmount", is(5000)))
+                .andExpect(jsonPath("$.data.maxDiscountAmount", is(1000)))
+                .andExpect(jsonPath("$.data.quantity", is(1)))
+                .andExpect(jsonPath("$.data.redeemedCount", is(0)))
+                .andExpect(jsonPath("$.data.hasRedeemed", is(false)))
+                .andExpect(jsonPath("$.data.expiredAt", notNullValue()))
+                .andReturn();
+
+        Integer rewardId = JsonPath.read(rewardResult.getResponse().getContentAsString(), "$.data.id");
+        Reward reward = rewardRepository.findById(rewardId.longValue()).orElseThrow();
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(100000), 10, "Staff mark-used points", null);
+        Long redemptionId = redeemReward(customer, reward);
+
+        mockMvc.perform(patch("/api/rewards/redemptions/{redemptionId}/use", redemptionId)
+                        .header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("used")));
+
+        mockMvc.perform(patch("/api/rewards/redemptions/{redemptionId}/use", redemptionId)
+                        .header("Authorization", bearer(staffToken)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void bookingStatusCannotSkipWorkflow() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();

@@ -148,11 +148,12 @@ public class BookingServiceLayer {
 
         if (redemption != null) {
             Reward reward = redemption.getReward();
+            validateRewardOrderMinimum(subtotal, reward);
             if (reward.getRewardType() == RewardType.ADD_ON) {
                 CarWashService addOn = requireActiveAddOnService(reward);
                 boolean alreadySelected = selectedServices.stream().anyMatch(service -> service.getId().equals(addOn.getId()));
                 if (alreadySelected) {
-                    discount = discount.add(addOn.getPrice().min(subtotal.subtract(discount)));
+                    discount = discount.add(limitRewardDiscount(addOn.getPrice().min(subtotal.subtract(discount)), reward));
                 }
             } else {
                 discount = discount.add(discountForReward(subtotal.subtract(discount), reward));
@@ -571,13 +572,26 @@ public class BookingServiceLayer {
     }
 
     private BigDecimal discountForReward(BigDecimal base, Reward reward) {
+        BigDecimal discount = BigDecimal.ZERO;
         if (reward.getRewardType() == RewardType.FREE_WASH) {
-            return base;
+            discount = base;
+        } else if (reward.getRewardType() == RewardType.DISCOUNT_CODE && reward.getDiscountAmount() != null) {
+            discount = reward.getDiscountAmount().min(base);
         }
-        if (reward.getRewardType() == RewardType.DISCOUNT_CODE && reward.getDiscountAmount() != null) {
-            return reward.getDiscountAmount().min(base);
+        return limitRewardDiscount(discount, reward);
+    }
+
+    private void validateRewardOrderMinimum(BigDecimal subtotal, Reward reward) {
+        if (reward.getMinOrderAmount() != null && subtotal.compareTo(reward.getMinOrderAmount()) < 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Reward requires a higher order amount");
         }
-        return BigDecimal.ZERO;
+    }
+
+    private BigDecimal limitRewardDiscount(BigDecimal discount, Reward reward) {
+        if (reward.getMaxDiscountAmount() != null) {
+            return discount.min(reward.getMaxDiscountAmount());
+        }
+        return discount;
     }
 
     private CarWashService requireActiveAddOnService(Reward reward) {
