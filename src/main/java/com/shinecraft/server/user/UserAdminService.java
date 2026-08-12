@@ -91,6 +91,8 @@ public class UserAdminService {
         if (payload.containsKey("role") && payload.get("role") instanceof String role) {
             if ("admin".equalsIgnoreCase(role)) {
                 user.setRole(UserRole.ROLE_ADMIN);
+            } else if ("staff".equalsIgnoreCase(role)) {
+                user.setRole(UserRole.ROLE_STAFF);
             } else if ("customer".equalsIgnoreCase(role)) {
                 user.setRole(UserRole.ROLE_CUSTOMER);
             }
