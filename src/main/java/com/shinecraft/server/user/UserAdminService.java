@@ -10,6 +10,7 @@ import com.shinecraft.server.vehicle.VehicleRepository;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -71,6 +72,29 @@ public class UserAdminService {
         UserRole before = user.getRole();
         user.setRole(role);
         audit(user, "USER_ROLE_UPDATED", before.name(), role.name());
+        return UserAdminDtos.UserSearchResponse.from(
+                userRepository.save(user), vehicleRepository.findByCustomerOrderByIsActiveDescIdAsc(user));
+    }
+
+    @Transactional
+    public UserAdminDtos.UserSearchResponse updateFromFrontend(Long id, Map<String, Object> payload) {
+        User user = findUser(id);
+        if (payload.containsKey("displayName") && payload.get("displayName") instanceof String displayName && !displayName.isBlank()) {
+            user.setFullName(displayName.trim());
+        }
+        if (payload.containsKey("phone") && payload.get("phone") instanceof String phone && !phone.isBlank()) {
+            user.setPhone(PhoneNormalizer.normalize(phone));
+        }
+        if (payload.containsKey("isActive") && payload.get("isActive") instanceof Boolean active) {
+            user.setActive(active);
+        }
+        if (payload.containsKey("role") && payload.get("role") instanceof String role) {
+            if ("admin".equalsIgnoreCase(role)) {
+                user.setRole(UserRole.ROLE_ADMIN);
+            } else if ("customer".equalsIgnoreCase(role)) {
+                user.setRole(UserRole.ROLE_CUSTOMER);
+            }
+        }
         return UserAdminDtos.UserSearchResponse.from(
                 userRepository.save(user), vehicleRepository.findByCustomerOrderByIsActiveDescIdAsc(user));
     }

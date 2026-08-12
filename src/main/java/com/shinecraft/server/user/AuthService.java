@@ -94,6 +94,30 @@ public class AuthService {
         return authResponse(user);
     }
 
+    @Transactional
+    public UserDtos.UserResponse signup(UserDtos.SignupRequest request) {
+        String phone = PhoneNormalizer.normalize(request.phone());
+        if (userRepository.existsByPhone(phone)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
+        }
+
+        User user = new User();
+        user.setFullName((request.lastName().trim() + " " + request.firstName().trim()).trim());
+        user.setPhone(phone);
+        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setRole(UserRole.ROLE_CUSTOMER);
+        user = userRepository.save(user);
+
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setCustomer(user);
+        account.setMembershipTier(membershipTierRepository
+                .findFirstByIsActiveTrueAndMinPointsLessThanEqualOrderByMinPointsDesc(0)
+                .orElse(null));
+        loyaltyAccountRepository.save(account);
+
+        return UserDtos.UserResponse.from(user);
+    }
+
     public UserDtos.AuthResponse refresh(UserDtos.RefreshTokenRequest request) {
         RefreshTokenService.RotatedRefreshToken rotatedToken = refreshTokenService.rotate(request.refreshToken());
         return authResponse(rotatedToken.user(), rotatedToken.refreshToken());

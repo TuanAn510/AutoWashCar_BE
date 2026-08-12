@@ -5,12 +5,15 @@ import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
+import com.shinecraft.server.user.UserDtos;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -72,20 +75,75 @@ public class LoyaltyService {
                         .findById(id)
                         .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Membership tier not found"));
         tier.setName(request.name().trim());
-        tier.setMinPoints(request.minPoints());
-        tier.setDiscountPercent(request.discountPercent());
-        tier.setBookingWindowDays(request.bookingWindowDays());
-        tier.setPriorityLevel(request.priorityLevel());
+        tier.setMinPoints(request.resolvedMinPoints() == null ? 0 : request.resolvedMinPoints());
+        tier.setDiscountPercent(request.discountPercent() == null ? BigDecimal.ZERO : request.discountPercent());
+        tier.setBookingWindowDays(request.bookingWindowDays() == null ? 7 : request.bookingWindowDays());
+        tier.setPriorityLevel(request.priorityLevel() == null ? 0 : request.priorityLevel());
         tier.setDescription(request.description());
-        if (request.active() != null) {
-            tier.setActive(request.active());
+        if (request.resolvedActive() != null) {
+            tier.setActive(request.resolvedActive());
         }
+        return LoyaltyDtos.TierResponse.from(tierRepository.save(tier));
+    }
+
+    @Transactional
+    public LoyaltyDtos.TierResponse deactivateTier(Long id) {
+        MembershipTier tier = tierRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Membership tier not found"));
+        tier.setActive(false);
         return LoyaltyDtos.TierResponse.from(tierRepository.save(tier));
     }
 
     @Transactional(readOnly = true)
     public LoyaltyDtos.LoyaltyAccountResponse myAccount() {
         return LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(authService.currentUser()));
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> customersWithLoyalty(String search) {
+        String keyword = search == null ? "" : search.trim().toLowerCase();
+        return userRepository.findAll().stream()
+                .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
+                .filter(user -> keyword.isBlank()
+                        || user.getFullName().toLowerCase().contains(keyword)
+                        || user.getPhone().contains(keyword))
+                .map(user -> {
+                    Map<String, Object> customer = new LinkedHashMap<>();
+                    customer.put("_id", String.valueOf(user.getId()));
+                    customer.put("displayName", user.getFullName());
+                    customer.put("phone", user.getPhone());
+                    customer.put("role", UserDtos.toFrontendRole(user.getRole()));
+                    customer.put("isActive", user.isActive());
+                    customer.put("createdAt", user.getCreatedAt());
+                    customer.put("updatedAt", user.getUpdatedAt());
+
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("customer", customer);
+                    item.put("loyaltyAccount", LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(user)));
+                    return item;
+                })
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public LoyaltyDtos.LoyaltyAccountResponse customerAccount(Long customerId) {
+        User customer = userRepository
+                .findById(customerId)
+                .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
+        return LoyaltyDtos.LoyaltyAccountResponse.from(getOrCreateAccount(customer));
+    }
+
+    @Transactional(readOnly = true)
+    public List<LoyaltyDtos.TransactionResponse> customerTransactions(Long customerId) {
+        User customer = userRepository
+                .findById(customerId)
+                .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
+        return transactionRepository.findByCustomerOrderByCreatedAtDesc(customer).stream()
+                .map(LoyaltyDtos.TransactionResponse::from)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -112,8 +170,8 @@ public class LoyaltyService {
         reward.setName(request.name().trim());
         reward.setDescription(request.description());
         reward.setRequiredPoints(request.requiredPoints());
-        reward.setRewardType(request.rewardType());
-        reward.setDiscountAmount(request.discountAmount());
+        reward.setRewardType(request.resolvedRewardType());
+        reward.setDiscountAmount(request.resolvedDiscountAmount());
         if (request.addOnServiceId() != null) {
             CarWashService service = carWashServiceRepository
                     .findById(request.addOnServiceId())
@@ -122,9 +180,18 @@ public class LoyaltyService {
         } else {
             reward.setAddOnService(null);
         }
-        if (request.active() != null) {
-            reward.setActive(request.active());
+        if (request.resolvedActive() != null) {
+            reward.setActive(request.resolvedActive());
         }
+        return LoyaltyDtos.RewardResponse.from(rewardRepository.save(reward));
+    }
+
+    @Transactional
+    public LoyaltyDtos.RewardResponse deactivateReward(Long id) {
+        Reward reward = rewardRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward not found"));
+        reward.setActive(false);
         return LoyaltyDtos.RewardResponse.from(rewardRepository.save(reward));
     }
 
@@ -169,6 +236,16 @@ public class LoyaltyService {
         return redemptionRepository.findByCustomerOrderByRedeemedAtDesc(authService.currentUser()).stream()
                 .map(LoyaltyDtos.RedemptionResponse::from)
                 .toList();
+    }
+
+    @Transactional
+    public LoyaltyDtos.RedemptionResponse markRedemptionUsed(Long redemptionId) {
+        RewardRedemption redemption = redemptionRepository
+                .findById(redemptionId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward redemption not found"));
+        redemption.setStatus(RewardRedemptionStatus.USED);
+        redemption.setUsedAt(LocalDateTime.now());
+        return LoyaltyDtos.RedemptionResponse.from(redemptionRepository.save(redemption));
     }
 
     @Transactional
