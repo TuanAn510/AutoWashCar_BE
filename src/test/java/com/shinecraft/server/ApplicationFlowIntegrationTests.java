@@ -289,6 +289,20 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void customerCanCreateAppointmentAtAnArbitraryMinute() throws Exception {
+        CustomerContext customer = registerCustomer();
+        LocalDateTime scheduledAt = nextSlot().withMinute(17);
+
+        mockMvc.perform(post("/api/appointments")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bookingJson(customer, null, scheduledAt)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.data.scheduledAt", is(scheduledAt.format(JSON_DATE_TIME))));
+    }
+
+    @Test
     void activeSlotCannotBeDoubleBooked() throws Exception {
         CustomerContext firstCustomer = registerCustomer();
         CustomerContext secondCustomer = registerCustomer();
