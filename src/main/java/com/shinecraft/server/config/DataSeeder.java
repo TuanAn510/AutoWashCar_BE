@@ -41,7 +41,7 @@ public class DataSeeder implements CommandLineRunner {
             @Value("${app.admin.seed-phone}") String adminPhone,
             @Value("${app.admin.seed-password}") String adminPassword,
             @Value("${app.staff.seed-phone:0987654321}") String staffPhone,
-            @Value("${app.staff.seed-password:staff@tester}") String staffPassword) {
+            @Value("${app.staff.seed-password:Staff@123456}") String staffPassword) {
         this.userRepository = userRepository;
         this.tierRepository = tierRepository;
         this.categoryRepository = categoryRepository;
