@@ -1,5 +1,6 @@
 package com.shinecraft.server.loyalty;
 
+import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
@@ -37,6 +38,7 @@ public class LoyaltyService {
     private final CarWashServiceRepository carWashServiceRepository;
     private final UserRepository userRepository;
     private final AuthService authService;
+    private final AuditTrailService auditTrailService;
     private final int pointExpiryMonths;
 
     public LoyaltyService(
@@ -50,6 +52,7 @@ public class LoyaltyService {
             CarWashServiceRepository carWashServiceRepository,
             UserRepository userRepository,
             AuthService authService,
+            AuditTrailService auditTrailService,
             @Value("${app.loyalty.point-expiry-months:12}") int pointExpiryMonths) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
@@ -61,6 +64,7 @@ public class LoyaltyService {
         this.carWashServiceRepository = carWashServiceRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+        this.auditTrailService = auditTrailService;
         this.pointExpiryMonths = pointExpiryMonths;
     }
 
@@ -236,6 +240,12 @@ public class LoyaltyService {
         transaction.setDescription("Redeemed reward " + reward.getName());
         transactionRepository.save(transaction);
 
+        auditTrailService.record(
+                customer,
+                customer,
+                "REWARD_REDEEMED",
+                null,
+                rewardRedemptionAuditValue(redemption));
         return LoyaltyDtos.RedemptionResponse.from(redemption);
     }
 
@@ -259,9 +269,18 @@ public class LoyaltyService {
             redemptionRepository.save(redemption);
             throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
         }
+        User actor = authService.currentUser();
+        String beforeValue = rewardRedemptionAuditValue(redemption);
         redemption.setStatus(RewardRedemptionStatus.USED);
         redemption.setUsedAt(LocalDateTime.now());
-        return LoyaltyDtos.RedemptionResponse.from(redemptionRepository.save(redemption));
+        RewardRedemption savedRedemption = redemptionRepository.save(redemption);
+        auditTrailService.record(
+                actor,
+                savedRedemption.getCustomer(),
+                "REWARD_REDEMPTION_USED",
+                beforeValue,
+                rewardRedemptionAuditValue(savedRedemption));
+        return LoyaltyDtos.RedemptionResponse.from(savedRedemption);
     }
 
     @Transactional
@@ -447,6 +466,15 @@ public class LoyaltyService {
     }
 
     private record QuarterWindow(LocalDate start, LocalDate nextStart, String periodKey) {}
+
+    private String rewardRedemptionAuditValue(RewardRedemption redemption) {
+        return auditTrailService.rewardRedemptionValue(
+                redemption.getId(),
+                redemption.getReward().getId(),
+                redemption.getCustomer().getId(),
+                redemption.getStatus().name(),
+                redemption.getUsedAt() == null ? null : redemption.getUsedAt().toString());
+    }
 
     private void useOldestPointLots(User customer, int points) {
         int remaining = points;

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
@@ -65,6 +66,7 @@ class BookingServiceLayerTest {
                 promotionService,
                 authService,
                 userRepository,
+                mock(AuditTrailService.class),
                 10000);
 
         customer = new User();
