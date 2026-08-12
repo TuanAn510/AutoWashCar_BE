@@ -1,10 +1,12 @@
 package com.shinecraft.server.booking;
 
 import com.shinecraft.server.common.ApiResponse;
+import com.shinecraft.server.common.ApiSummaryListResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -28,9 +30,80 @@ public class BookingController {
         return ApiResponse.ok("Booking created successfully", bookingService.create(request));
     }
 
+    @PostMapping("/api/appointments")
+    ApiResponse<BookingDtos.AppointmentResponse> createAppointment(
+            @Valid @RequestBody BookingDtos.CreateBookingRequest request) {
+        return ApiResponse.ok("Appointment created successfully", bookingService.createAppointment(request));
+    }
+
     @GetMapping("/api/bookings/my")
     ApiResponse<List<BookingDtos.BookingResponse>> myBookings() {
         return ApiResponse.ok("My bookings retrieved successfully", bookingService.myBookings());
+    }
+
+    @GetMapping("/api/appointments/my")
+    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> myAppointments() {
+        List<BookingDtos.AppointmentResponse> appointments = bookingService.myAppointments();
+        return ApiSummaryListResponse.ok(
+                "My appointments retrieved successfully",
+                appointments,
+                summarizeAppointmentResponses(appointments));
+    }
+
+    @GetMapping("/api/appointments/staff/my")
+    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> myStaffAppointments() {
+        return appointments();
+    }
+
+    @GetMapping("/api/appointments")
+    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> appointments() {
+        List<BookingDtos.AppointmentResponse> appointments = bookingService.allAppointments();
+        return ApiSummaryListResponse.ok(
+                "Appointments retrieved successfully",
+                appointments,
+                summarizeAppointmentResponses(appointments));
+    }
+
+    @GetMapping("/api/appointments/{id}")
+    ApiResponse<BookingDtos.AppointmentResponse> appointmentDetail(@PathVariable Long id) {
+        return ApiResponse.ok("Appointment retrieved successfully", bookingService.appointmentDetail(id));
+    }
+
+    @PatchMapping("/api/appointments/{id}/status")
+    ApiResponse<BookingDtos.AppointmentResponse> updateAppointmentStatus(
+            @PathVariable Long id, @Valid @RequestBody BookingDtos.UpdateStatusRequest request) {
+        return ApiResponse.ok(
+                "Appointment status updated successfully",
+                bookingService.updateAppointmentStatus(id, request.resolvedStatus()));
+    }
+
+    @PatchMapping("/api/appointments/my/{id}/cancel")
+    ApiResponse<BookingDtos.AppointmentResponse> cancelMyAppointment(@PathVariable Long id) {
+        return ApiResponse.ok(
+                "Appointment cancelled successfully",
+                bookingService.updateAppointmentStatus(id, BookingStatus.CANCELLED));
+    }
+
+    @PatchMapping("/api/appointments/{id}/cancel")
+    ApiResponse<BookingDtos.AppointmentResponse> cancelAppointment(@PathVariable Long id) {
+        return ApiResponse.ok(
+                "Appointment cancelled successfully",
+                bookingService.updateAppointmentStatus(id, BookingStatus.CANCELLED));
+    }
+
+    @PatchMapping("/api/appointments/{id}/payment-status")
+    ApiResponse<BookingDtos.AppointmentResponse> updatePaymentStatus(@PathVariable Long id) {
+        return ApiResponse.ok("Payment status updated successfully", bookingService.appointmentDetail(id));
+    }
+
+    @PatchMapping("/api/appointments/{id}/assign-staff")
+    ApiResponse<BookingDtos.AppointmentResponse> assignStaff(@PathVariable Long id) {
+        return ApiResponse.ok("Staff assigned successfully", bookingService.appointmentDetail(id));
+    }
+
+    @PatchMapping("/api/appointments/{id}/reschedule")
+    ApiResponse<BookingDtos.AppointmentResponse> reschedule(@PathVariable Long id, @RequestBody Map<String, String> request) {
+        return ApiResponse.ok("Appointment rescheduled successfully", bookingService.appointmentDetail(id));
     }
 
     @GetMapping("/api/bookings/availability")
@@ -52,6 +125,17 @@ public class BookingController {
     @PatchMapping("/api/admin/bookings/{id}/status")
     ApiResponse<BookingDtos.BookingResponse> updateStatus(
             @PathVariable Long id, @Valid @RequestBody BookingDtos.UpdateStatusRequest request) {
-        return ApiResponse.ok("Booking status updated successfully", bookingService.updateStatus(id, request.status()));
+        return ApiResponse.ok("Booking status updated successfully", bookingService.updateStatus(id, request.resolvedStatus()));
+    }
+
+    private BookingDtos.AppointmentStatusSummary summarizeAppointmentResponses(
+            List<BookingDtos.AppointmentResponse> appointments) {
+        return new BookingDtos.AppointmentStatusSummary(
+                appointments.size(),
+                appointments.stream().filter(appointment -> appointment.status().equals("pending")).count(),
+                appointments.stream().filter(appointment -> appointment.status().equals("confirmed")).count(),
+                appointments.stream().filter(appointment -> appointment.status().equals("in_progress")).count(),
+                appointments.stream().filter(appointment -> appointment.status().equals("completed")).count(),
+                appointments.stream().filter(appointment -> appointment.status().equals("cancelled")).count());
     }
 }

@@ -127,7 +127,8 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.phone", is(customer.phone())))
-                .andExpect(jsonPath("$.data.role", is("ROLE_CUSTOMER")));
+                .andExpect(jsonPath("$.data.role", is("customer")))
+                .andExpect(jsonPath("$.data.legacyRole", is("ROLE_CUSTOMER")));
     }
 
     @Test

@@ -96,8 +96,12 @@ public class BookingServiceLayer {
         validateBookingWindow(request.scheduledAt(), account);
         validateBookableSlot(request.scheduledAt());
 
-        List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(request.serviceIds()));
-        if (selectedServices.size() != request.serviceIds().size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
+        List<Long> requestedServiceIds = request.resolvedServiceIds();
+        if (requestedServiceIds.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "At least one service is required");
+        }
+        List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(requestedServiceIds));
+        if (selectedServices.size() != requestedServiceIds.size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
 
@@ -168,11 +172,40 @@ public class BookingServiceLayer {
         return BookingDtos.BookingResponse.from(bookingRepository.save(booking));
     }
 
+    @Transactional
+    public BookingDtos.AppointmentResponse createAppointment(BookingDtos.CreateBookingRequest request) {
+        BookingDtos.BookingResponse created = create(request);
+        return appointmentDetail(created.id());
+    }
+
     @Transactional(readOnly = true)
     public List<BookingDtos.BookingResponse> myBookings() {
         return bookingRepository.findByCustomerOrderByScheduledAtDesc(authService.currentUser()).stream()
                 .map(BookingDtos.BookingResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<BookingDtos.AppointmentResponse> myAppointments() {
+        return bookingRepository.findByCustomerOrderByScheduledAtDesc(authService.currentUser()).stream()
+                .map(BookingDtos.AppointmentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<BookingDtos.AppointmentResponse> allAppointments() {
+        return bookingRepository.findAll().stream()
+                .sorted(Comparator.comparing(Booking::getScheduledAt).reversed())
+                .map(BookingDtos.AppointmentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BookingDtos.AppointmentResponse appointmentDetail(Long bookingId) {
+        Booking booking = bookingRepository
+                .findById(bookingId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+        return BookingDtos.AppointmentResponse.from(booking);
     }
 
     @Transactional(readOnly = true)
@@ -254,6 +287,12 @@ public class BookingServiceLayer {
             }
         }
         return BookingDtos.BookingResponse.from(booking);
+    }
+
+    @Transactional
+    public BookingDtos.AppointmentResponse updateAppointmentStatus(Long bookingId, BookingStatus status) {
+        updateStatus(bookingId, status);
+        return appointmentDetail(bookingId);
     }
 
     private void validateStatusTransition(BookingStatus currentStatus, BookingStatus nextStatus) {

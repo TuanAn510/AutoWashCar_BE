@@ -1,5 +1,6 @@
 package com.shinecraft.server.user;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shinecraft.server.vehicle.Vehicle;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -12,18 +13,30 @@ public final class UserAdminDtos {
 
     public record UserSearchResponse(
             Long id,
+            @JsonProperty("_id") String uid,
             String fullName,
+            String displayName,
             String phone,
-            UserRole role,
+            String role,
+            String legacyRole,
             boolean active,
+            boolean isActive,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
             List<VehicleSummary> vehicles) {
         public static UserSearchResponse from(User user, List<Vehicle> vehicles) {
             return new UserSearchResponse(
                     user.getId(),
+                    String.valueOf(user.getId()),
+                    user.getFullName(),
                     user.getFullName(),
                     user.getPhone(),
-                    user.getRole(),
+                    UserDtos.toFrontendRole(user.getRole()),
+                    user.getRole().name(),
                     user.isActive(),
+                    user.isActive(),
+                    user.getCreatedAt(),
+                    user.getUpdatedAt(),
                     vehicles.stream().map(VehicleSummary::from).toList());
         }
     }
