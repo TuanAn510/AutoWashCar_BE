@@ -30,6 +30,8 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 class BookingServiceLayerTest {
     private BookingRepository bookingRepository;
@@ -524,6 +526,16 @@ class BookingServiceLayerTest {
 
         assertThat(item.checkInAt()).isNull();
         assertThat(item.waitingMinutes()).isNull();
+    }
+
+    @Test
+    void createUsesSerializableTransactionIsolation() throws NoSuchMethodException {
+        Transactional transaction = BookingServiceLayer.class
+                .getMethod("create", BookingDtos.CreateBookingRequest.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transaction).isNotNull();
+        assertThat(transaction.isolation()).isEqualTo(Isolation.SERIALIZABLE);
     }
 
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt) {

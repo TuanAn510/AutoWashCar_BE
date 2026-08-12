@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -77,7 +78,7 @@ public class BookingServiceLayer {
         this.pointsAmountUnit = pointsAmountUnit;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public BookingDtos.BookingResponse create(BookingDtos.CreateBookingRequest request) {
         User customer = authService.currentUser();
         Vehicle vehicle = vehicleRepository
