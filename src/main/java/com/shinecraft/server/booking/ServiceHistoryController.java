@@ -5,7 +5,9 @@ import com.shinecraft.server.common.ApiListResponse;
 import com.shinecraft.server.common.ApiResponse;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.user.AuthService;
+import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserDtos;
+import com.shinecraft.server.user.UserRole;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -58,9 +60,13 @@ public class ServiceHistoryController {
     @GetMapping("/api/service-histories/staff/my")
     @Transactional(readOnly = true)
     ApiListResponse<ServiceHistoryResponse> staffServiceHistories() {
+        User staff = authService.currentUser();
+        List<Booking> bookings = staff.getRole() == UserRole.ROLE_ADMIN
+                ? bookingRepository.findAll()
+                : bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff);
         return ApiListResponse.ok(
                 "Staff service histories retrieved successfully",
-                bookingRepository.findAll().stream().map(ServiceHistoryResponse::from).toList());
+                bookings.stream().map(ServiceHistoryResponse::from).toList());
     }
 
     @GetMapping("/api/service-histories/my/vehicles/{vehicleId}")

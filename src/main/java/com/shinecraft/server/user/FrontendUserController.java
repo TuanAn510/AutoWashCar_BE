@@ -1,9 +1,19 @@
 package com.shinecraft.server.user;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingRepository;
+import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.common.ApiListResponse;
 import com.shinecraft.server.common.ApiResponse;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,11 +26,17 @@ public class FrontendUserController {
     private final AuthService authService;
     private final UserAdminService userAdminService;
     private final UserRepository userRepository;
+    private final BookingRepository bookingRepository;
 
-    public FrontendUserController(AuthService authService, UserAdminService userAdminService, UserRepository userRepository) {
+    public FrontendUserController(
+            AuthService authService,
+            UserAdminService userAdminService,
+            UserRepository userRepository,
+            BookingRepository bookingRepository) {
         this.authService = authService;
         this.userAdminService = userAdminService;
         this.userRepository = userRepository;
+        this.bookingRepository = bookingRepository;
     }
 
     @PatchMapping("/api/users/me")
@@ -48,8 +64,28 @@ public class FrontendUserController {
     }
 
     @GetMapping("/api/users/staffs/workload")
-    ApiResponse<List<Object>> workload() {
-        return ApiResponse.ok("Staff workload retrieved successfully", List.of());
+    ApiResponse<List<StaffWorkloadResponse>> workload() {
+        LocalDate today = LocalDate.now();
+        LocalDate weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDateTime todayStart = today.atStartOfDay();
+        LocalDateTime tomorrowStart = today.plusDays(1).atStartOfDay();
+        LocalDateTime weekStartAt = weekStart.atStartOfDay();
+        LocalDateTime nextWeekStartAt = weekStart.plusWeeks(1).atStartOfDay();
+
+        Map<Long, List<Booking>> bookingsByStaff = bookingRepository.findByAssignedStaffIsNotNull().stream()
+                .collect(Collectors.groupingBy(booking -> booking.getAssignedStaff().getId()));
+
+        List<StaffWorkloadResponse> workloads = userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF).stream()
+                .map(staff -> StaffWorkloadResponse.from(
+                        staff,
+                        bookingsByStaff.getOrDefault(staff.getId(), List.of()),
+                        todayStart,
+                        tomorrowStart,
+                        weekStartAt,
+                        nextWeekStartAt))
+                .toList();
+
+        return ApiResponse.ok("Staff workload retrieved successfully", workloads);
     }
 
     @GetMapping("/api/users/{id}")
@@ -60,5 +96,47 @@ public class FrontendUserController {
     @PatchMapping("/api/users/{id}")
     ApiResponse<UserAdminDtos.UserSearchResponse> update(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
         return ApiResponse.ok("User updated successfully", userAdminService.updateFromFrontend(id, payload));
+    }
+
+    public record StaffWorkloadResponse(
+            @JsonProperty("_id") String uid,
+            String displayName,
+            String phone,
+            String avatarUrl,
+            boolean isActive,
+            long todayCount,
+            long weekCount,
+            long activeCount,
+            long completedCount) {
+        private static final Set<BookingStatus> ACTIVE_STATUSES = Set.of(
+                BookingStatus.PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.IN_QUEUE,
+                BookingStatus.IN_PROGRESS);
+
+        static StaffWorkloadResponse from(
+                User staff,
+                List<Booking> bookings,
+                LocalDateTime todayStart,
+                LocalDateTime tomorrowStart,
+                LocalDateTime weekStart,
+                LocalDateTime nextWeekStart) {
+            return new StaffWorkloadResponse(
+                    String.valueOf(staff.getId()),
+                    staff.getFullName(),
+                    staff.getPhone(),
+                    null,
+                    staff.isActive(),
+                    countScheduledBetween(bookings, todayStart, tomorrowStart),
+                    countScheduledBetween(bookings, weekStart, nextWeekStart),
+                    bookings.stream().filter(booking -> ACTIVE_STATUSES.contains(booking.getStatus())).count(),
+                    bookings.stream().filter(booking -> booking.getStatus() == BookingStatus.COMPLETED).count());
+        }
+
+        private static long countScheduledBetween(List<Booking> bookings, LocalDateTime start, LocalDateTime end) {
+            return bookings.stream()
+                    .filter(booking -> !booking.getScheduledAt().isBefore(start) && booking.getScheduledAt().isBefore(end))
+                    .count();
+        }
     }
 }
