@@ -70,6 +70,7 @@ class BookingServiceLayerTest {
                 10000);
 
         customer = new User();
+        customer.setRole(UserRole.ROLE_ADMIN);
         account = new LoyaltyAccount();
         when(authService.currentUser()).thenReturn(customer);
         when(loyaltyService.getOrCreateAccount(customer)).thenReturn(account);

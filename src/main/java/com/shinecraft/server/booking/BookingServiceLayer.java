@@ -48,7 +48,7 @@ public class BookingServiceLayer {
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
             BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
-            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
             BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
             BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
             BookingStatus.COMPLETED, Set.of(),
@@ -238,6 +238,7 @@ public class BookingServiceLayer {
 
     @Transactional(readOnly = true)
     public List<BookingDtos.AppointmentResponse> allAppointments() {
+        requireAdmin(authService.currentUser());
         return bookingRepository.findAll().stream()
                 .sorted(Comparator.comparing(Booking::getScheduledAt).reversed())
                 .map(BookingDtos.AppointmentResponse::from)
@@ -249,6 +250,7 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+        requireCanViewBooking(authService.currentUser(), booking);
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
@@ -313,10 +315,13 @@ public class BookingServiceLayer {
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
         User actor = authService.currentUser();
+        requireCanUpdateStatus(actor, booking, status);
         String beforeValue = bookingAuditValue(booking);
         BookingStatus currentStatus = booking.getStatus();
         validateStatusTransition(currentStatus, status);
-        if (currentStatus == BookingStatus.CONFIRMED && status == BookingStatus.IN_QUEUE && booking.getCheckInAt() == null) {
+        if (currentStatus == BookingStatus.CONFIRMED
+                && (status == BookingStatus.IN_QUEUE || status == BookingStatus.IN_PROGRESS)
+                && booking.getCheckInAt() == null) {
             booking.setCheckInAt(LocalDateTime.now());
         }
         if (status == BookingStatus.CANCELLED) {
@@ -357,6 +362,7 @@ public class BookingServiceLayer {
     public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
+        requireCanCreatePayment(actor, booking);
         String beforeValue = bookingAuditValue(booking);
         if (booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
@@ -387,6 +393,7 @@ public class BookingServiceLayer {
             Long bookingId, BookingDtos.UpdatePaymentStatusRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
+        requireCanUpdatePayment(actor, booking);
         String beforeValue = bookingAuditValue(booking);
         BookingPaymentStatus status = request == null
                 ? BookingPaymentStatus.PAID
@@ -410,6 +417,7 @@ public class BookingServiceLayer {
     public BookingDtos.AppointmentResponse assignStaff(Long bookingId, BookingDtos.AssignStaffRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
+        requireAdmin(actor);
         String beforeValue = bookingAuditValue(booking);
         User staff = userRepository
                 .findById(request.staffId())
@@ -429,6 +437,7 @@ public class BookingServiceLayer {
     public BookingDtos.AppointmentResponse reschedule(Long bookingId, BookingDtos.RescheduleRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
+        requireAdmin(actor);
         String beforeValue = bookingAuditValue(booking);
         if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
@@ -452,6 +461,66 @@ public class BookingServiceLayer {
                     HttpStatus.BAD_REQUEST,
                     "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
         }
+    }
+
+    private void requireAdmin(User actor) {
+        if (actor.getRole() != UserRole.ROLE_ADMIN) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Admin permission is required");
+        }
+    }
+
+    private void requireCanViewBooking(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN
+                || sameUser(actor, booking.getCustomer())
+                || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to access this appointment");
+    }
+
+    private void requireCanUpdateStatus(User actor, Booking booking, BookingStatus requestedStatus) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN) {
+            return;
+        }
+        if (actor.getRole() == UserRole.ROLE_STAFF && sameUser(actor, booking.getAssignedStaff())) {
+            if (requestedStatus == BookingStatus.CONFIRMED
+                    || requestedStatus == BookingStatus.IN_PROGRESS
+                    || requestedStatus == BookingStatus.COMPLETED) {
+                return;
+            }
+        }
+        if (actor.getRole() == UserRole.ROLE_CUSTOMER
+                && sameUser(actor, booking.getCustomer())
+                && requestedStatus == BookingStatus.CANCELLED) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment status");
+    }
+
+    private void requireCanCreatePayment(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN
+                || sameUser(actor, booking.getCustomer())
+                || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to create payment for this appointment");
+    }
+
+    private void requireCanUpdatePayment(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment payment");
+    }
+
+    private boolean sameUser(User first, User second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        if (first.getId() != null && second.getId() != null) {
+            return first.getId().equals(second.getId());
+        }
+        return first == second;
     }
 
     private void restoreCancellationResources(Booking booking) {

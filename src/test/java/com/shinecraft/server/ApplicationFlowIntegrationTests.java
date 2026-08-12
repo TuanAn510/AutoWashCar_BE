@@ -1093,6 +1093,61 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void staffCanOnlyAccessAndUpdateAssignedOperationalData() throws Exception {
+        CustomerContext assignedCustomer = registerCustomer();
+        CustomerContext unassignedCustomer = registerCustomer();
+        String adminToken = loginAdmin();
+        String staffToken = loginStaff();
+        User staff = firstActiveStaff();
+        Long assignedBookingId = createBooking(assignedCustomer, null);
+        Long unassignedBookingId = createBooking(unassignedCustomer, null);
+
+        mockMvc.perform(patch("/api/appointments/{id}/assign-staff", assignedBookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "staffId": %d
+                                }
+                                """
+                                .formatted(staff.getId())))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/appointments").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/service-histories").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/users").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/users/staffs/workload").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/appointments/{id}", unassignedBookingId)
+                        .header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(appointmentStatusPatch(staffToken, unassignedBookingId, "CONFIRMED"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "CONFIRMED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("confirmed")));
+        mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "IN_PROGRESS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("in_progress")));
+
+        mockMvc.perform(get("/api/appointments/staff/my").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*]._id", hasItem(String.valueOf(assignedBookingId))))
+                .andExpect(jsonPath("$.data[*]._id").value(org.hamcrest.Matchers.not(hasItem(String.valueOf(unassignedBookingId)))));
+
+        mockMvc.perform(get("/api/service-histories/staff/my").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*]._id", hasItem(String.valueOf(assignedBookingId))))
+                .andExpect(jsonPath("$.data[*]._id").value(org.hamcrest.Matchers.not(hasItem(String.valueOf(unassignedBookingId)))));
+    }
+
+    @Test
     void adminCanRescheduleAppointment() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();
@@ -1204,6 +1259,19 @@ class ApplicationFlowIntegrationTests {
             String adminToken, Long bookingId, String statusValue) {
         return patch("/api/admin/bookings/{id}/status", bookingId)
                 .header("Authorization", bearer(adminToken))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {
+                          "status": "%s"
+                        }
+                        """
+                        .formatted(statusValue));
+    }
+
+    private org.springframework.test.web.servlet.RequestBuilder appointmentStatusPatch(
+            String token, Long bookingId, String statusValue) {
+        return patch("/api/appointments/{id}/status", bookingId)
+                .header("Authorization", bearer(token))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {
