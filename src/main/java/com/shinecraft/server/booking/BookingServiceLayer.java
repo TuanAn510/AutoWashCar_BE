@@ -30,7 +30,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
@@ -252,17 +251,16 @@ public class BookingServiceLayer {
         User customer = authService.currentUser();
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         int bookingWindowDays = account.getMembershipTier() == null ? 7 : account.getMembershipTier().getBookingWindowDays();
-        Set<LocalDateTime> occupiedSlots = bookingRepository
+        List<Booking> activeBookings = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
                 .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
-                .flatMap(this::occupiedSlots)
-                .collect(Collectors.toSet());
+                .toList();
 
         List<BookingDtos.SlotResponse> slots = Stream.iterate(date.atTime(OPEN_TIME), time -> time.plusMinutes(SLOT_MINUTES))
                 .limit(slotCount())
                 .map(slot -> {
-                    String reason = slotReason(slot, bookingWindowDays, occupiedSlots);
+                    String reason = slotReason(slot, bookingWindowDays, activeBookings);
                     return new BookingDtos.SlotResponse(slot, reason == null, reason);
                 })
                 .toList();
@@ -477,15 +475,15 @@ public class BookingServiceLayer {
     }
 
     private void validateBookableSlot(LocalDateTime scheduledAt) {
-        if (!isAlignedSlot(scheduledAt.toLocalTime())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking slot must be between 08:00 and 17:00 and aligned to 30-minute intervals");
+        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
         }
         if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
         }
     }
 
-    private String slotReason(LocalDateTime slot, int bookingWindowDays, Set<LocalDateTime> occupiedSlots) {
+    private String slotReason(LocalDateTime slot, int bookingWindowDays, List<Booking> activeBookings) {
         LocalDateTime now = LocalDateTime.now();
         if (!slot.isAfter(now)) {
             return "PAST";
@@ -493,7 +491,7 @@ public class BookingServiceLayer {
         if (slot.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
         }
-        if (occupiedSlots.contains(slot)) {
+        if (activeBookings.stream().anyMatch(booking -> overlaps(slot, endAt(slot, 1), booking.getScheduledAt(), endAt(booking)))) {
             return "BOOKED";
         }
         return null;
@@ -530,11 +528,6 @@ public class BookingServiceLayer {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
     }
 
-    private Stream<LocalDateTime> occupiedSlots(Booking booking) {
-        return Stream.iterate(booking.getScheduledAt(), slot -> slot.plusMinutes(SLOT_MINUTES))
-                .limit(slotsForDuration(totalDuration(booking)));
-    }
-
     private boolean overlaps(LocalDateTime startAt, LocalDateTime endAt, LocalDateTime existingStartAt, LocalDateTime existingEndAt) {
         return startAt.isBefore(existingEndAt) && existingStartAt.isBefore(endAt);
     }
@@ -559,12 +552,11 @@ public class BookingServiceLayer {
         return endAt(booking.getScheduledAt(), slotsForDuration(totalDuration(booking)));
     }
 
-    private boolean isAlignedSlot(LocalTime time) {
+    private boolean isBookableStartTime(LocalTime time) {
         return !time.isBefore(OPEN_TIME)
                 && time.isBefore(CLOSE_TIME)
                 && time.getSecond() == 0
-                && time.getNano() == 0
-                && time.getMinute() % SLOT_MINUTES == 0;
+                && time.getNano() == 0;
     }
 
     private long slotCount() {
