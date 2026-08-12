@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.shinecraft.server.audit.AuditLog;
 import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.booking.Booking;
 import com.shinecraft.server.booking.BookingRepository;
@@ -415,6 +416,57 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath("$.success", is(false)));
 
         assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+        assertThat(promotionAuditLogsForPromotion(promotion.getId())).isEmpty();
+    }
+
+    @Test
+    void successfulPromotionBookingCreatesOnePromotionUsedAudit() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P04-USED-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        List<AuditLog> auditLogs = promotionAuditLogsForBooking(bookingId);
+        assertThat(auditLogs).hasSize(1);
+        AuditLog audit = auditLogs.get(0);
+        assertThat(audit.getActor().getId()).isEqualTo(customer.user().getId());
+        assertThat(audit.getTargetUser().getId()).isEqualTo(customer.user().getId());
+        assertThat(audit.getAction()).isEqualTo("PROMOTION_USED");
+        assertThat(audit.getBeforeValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 0));
+        assertThat(audit.getAfterValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 1));
+    }
+
+    @Test
+    void successfulCancellationCreatesOnePromotionRestoredAuditAndRepeatedCancellationCreatesNone() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("P04-RESTORED-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk());
+
+        List<AuditLog> auditLogs = promotionAuditLogsForBooking(bookingId);
+        assertThat(auditLogs).hasSize(2);
+        AuditLog restoreAudit = auditLogs.stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_RESTORED"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(restoreAudit.getActor().getId()).isEqualTo(customer.user().getId());
+        assertThat(restoreAudit.getTargetUser().getId()).isEqualTo(customer.user().getId());
+        assertThat(restoreAudit.getBeforeValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 1));
+        assertThat(restoreAudit.getAfterValue()).isEqualTo(promotionAuditValue(promotion, bookingId, 0));
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isBadRequest());
+        assertThat(promotionAuditLogsForBooking(bookingId)).hasSize(2);
+    }
+
+    @Test
+    void bookingWithoutPromotionCreatesNoPromotionAudit() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Long bookingId = createBooking(customer, null);
+
+        assertThat(promotionAuditLogsForBooking(bookingId)).isEmpty();
     }
 
     @Test
@@ -978,6 +1030,27 @@ class ApplicationFlowIntegrationTests {
         promotion.setStartAt(LocalDateTime.now().minusMinutes(1));
         promotion.setEndAt(LocalDateTime.now().plusDays(1));
         return promotionRepository.save(promotion);
+    }
+
+    private List<AuditLog> promotionAuditLogsForBooking(Long bookingId) {
+        return auditLogRepository.findAll().stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_USED")
+                        || audit.getAction().equals("PROMOTION_RESTORED"))
+                .filter(audit -> audit.getAfterValue().contains("\"bookingId\":" + bookingId + ","))
+                .toList();
+    }
+
+    private List<AuditLog> promotionAuditLogsForPromotion(Long promotionId) {
+        return auditLogRepository.findAll().stream()
+                .filter(audit -> audit.getAction().equals("PROMOTION_USED")
+                        || audit.getAction().equals("PROMOTION_RESTORED"))
+                .filter(audit -> audit.getAfterValue().contains("\"promotionId\":" + promotionId + ","))
+                .toList();
+    }
+
+    private String promotionAuditValue(Promotion promotion, Long bookingId, int usedCount) {
+        return "{\"promotionId\":%d,\"promotionCode\":\"%s\",\"bookingId\":%d,\"usedCount\":%d}"
+                .formatted(promotion.getId(), promotion.getCode(), bookingId, usedCount);
     }
 
     private int concurrentClaimSuccesses(Long promotionId) throws Exception {

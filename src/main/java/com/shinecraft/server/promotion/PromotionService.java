@@ -1,11 +1,14 @@
 package com.shinecraft.server.promotion;
 
+import com.shinecraft.server.audit.AuditLog;
+import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
 import com.shinecraft.server.user.AuthService;
+import com.shinecraft.server.user.User;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -17,16 +20,19 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PromotionService {
     private final PromotionRepository promotionRepository;
+    private final AuditLogRepository auditLogRepository;
     private final MembershipTierRepository tierRepository;
     private final LoyaltyService loyaltyService;
     private final AuthService authService;
 
     public PromotionService(
             PromotionRepository promotionRepository,
+            AuditLogRepository auditLogRepository,
             MembershipTierRepository tierRepository,
             LoyaltyService loyaltyService,
             AuthService authService) {
         this.promotionRepository = promotionRepository;
+        this.auditLogRepository = auditLogRepository;
         this.tierRepository = tierRepository;
         this.loyaltyService = loyaltyService;
         this.authService = authService;
@@ -163,5 +169,56 @@ public class PromotionService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Promotion usage cannot be restored");
         }
         promotion.setUsedCount(promotion.getUsedCount() - 1);
+    }
+
+    public void recordPromotionUsed(Promotion promotion, User customer, Long bookingId) {
+        int usedCountAfter = promotion.getUsedCount();
+        recordPromotionAudit(
+                "PROMOTION_USED", promotion, customer, bookingId, usedCountAfter - 1, usedCountAfter);
+    }
+
+    public void recordPromotionRestored(Promotion promotion, User customer, Long bookingId, int usedCountBefore) {
+        recordPromotionAudit(
+                "PROMOTION_RESTORED", promotion, customer, bookingId, usedCountBefore, promotion.getUsedCount());
+    }
+
+    private void recordPromotionAudit(
+            String action, Promotion promotion, User customer, Long bookingId, int usedCountBefore, int usedCountAfter) {
+        AuditLog auditLog = new AuditLog();
+        auditLog.setActor(customer);
+        auditLog.setTargetUser(customer);
+        auditLog.setAction(action);
+        auditLog.setBeforeValue(auditValue(promotion, bookingId, usedCountBefore));
+        auditLog.setAfterValue(auditValue(promotion, bookingId, usedCountAfter));
+        auditLogRepository.save(auditLog);
+    }
+
+    private String auditValue(Promotion promotion, Long bookingId, int usedCount) {
+        return "{\"promotionId\":%d,\"promotionCode\":\"%s\",\"bookingId\":%d,\"usedCount\":%d}"
+                .formatted(promotion.getId(), escapeJson(promotion.getCode()), bookingId, usedCount);
+    }
+
+    private String escapeJson(String value) {
+        StringBuilder escaped = new StringBuilder();
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            switch (character) {
+                case '"' -> escaped.append("\\\"");
+                case '\\' -> escaped.append("\\\\");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (character < 0x20) {
+                        escaped.append("\\u%04x".formatted((int) character));
+                    } else {
+                        escaped.append(character);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
 }

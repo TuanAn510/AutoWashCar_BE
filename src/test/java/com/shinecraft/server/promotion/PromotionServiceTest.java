@@ -3,28 +3,36 @@ package com.shinecraft.server.promotion;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.shinecraft.server.audit.AuditLog;
+import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
 import com.shinecraft.server.user.AuthService;
+import com.shinecraft.server.user.User;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class PromotionServiceTest {
     private PromotionRepository promotionRepository;
+    private AuditLogRepository auditLogRepository;
     private PromotionService promotionService;
 
     @BeforeEach
     void setUp() {
         promotionRepository = mock(PromotionRepository.class);
+        auditLogRepository = mock(AuditLogRepository.class);
         promotionService = new PromotionService(
                 promotionRepository,
+                auditLogRepository,
                 mock(MembershipTierRepository.class),
                 mock(LoyaltyService.class),
                 mock(AuthService.class));
@@ -128,6 +136,26 @@ class PromotionServiceTest {
                 .hasMessage("Promotion usage cannot be restored");
 
         assertThat(promotion.getUsedCount()).isZero();
+    }
+
+    @Test
+    void recordsPromotionUseAuditWithEscapedDeterministicJson() {
+        Promotion promotion = promotionWithId(12L, "SAVE\"\\\n", 1);
+        User customer = new User();
+        customer.setId(7L);
+
+        promotionService.recordPromotionUsed(promotion, customer, 34L);
+
+        ArgumentCaptor<AuditLog> auditCaptor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogRepository).save(auditCaptor.capture());
+        AuditLog audit = auditCaptor.getValue();
+        assertThat(audit.getActor()).isSameAs(customer);
+        assertThat(audit.getTargetUser()).isSameAs(customer);
+        assertThat(audit.getAction()).isEqualTo("PROMOTION_USED");
+        assertThat(audit.getBeforeValue())
+                .isEqualTo("{\"promotionId\":12,\"promotionCode\":\"SAVE\\\"\\\\\\n\",\"bookingId\":34,\"usedCount\":0}");
+        assertThat(audit.getAfterValue())
+                .isEqualTo("{\"promotionId\":12,\"promotionCode\":\"SAVE\\\"\\\\\\n\",\"bookingId\":34,\"usedCount\":1}");
     }
 
     private PromotionDtos.PromotionRequest request(DiscountType type, String value, Integer usageLimit) {
