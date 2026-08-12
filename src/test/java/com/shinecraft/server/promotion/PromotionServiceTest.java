@@ -1,6 +1,7 @@
 package com.shinecraft.server.promotion;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -116,6 +117,17 @@ class PromotionServiceTest {
         assertThatThrownBy(() -> promotionService.save(null, request))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("End date must be after start date");
+    }
+
+    @Test
+    void restoreUsageRejectsZeroAndLeavesItUnchanged() {
+        Promotion promotion = promotionWithId(1L, "SAVE10", 0);
+
+        assertThatThrownBy(() -> promotionService.restoreUsage(promotion))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Promotion usage cannot be restored");
+
+        assertThat(promotion.getUsedCount()).isZero();
     }
 
     private PromotionDtos.PromotionRequest request(DiscountType type, String value, Integer usageLimit) {

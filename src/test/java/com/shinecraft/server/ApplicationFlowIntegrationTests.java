@@ -5,6 +5,9 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,6 +16,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import com.shinecraft.server.audit.AuditLogRepository;
+import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingRepository;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
@@ -32,6 +37,8 @@ import com.shinecraft.server.loyalty.RewardRedemptionStatus;
 import com.shinecraft.server.loyalty.RewardRepository;
 import com.shinecraft.server.loyalty.RewardType;
 import com.shinecraft.server.promotion.PromotionRepository;
+import com.shinecraft.server.promotion.Promotion;
+import com.shinecraft.server.promotion.DiscountType;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
@@ -46,10 +53,13 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -75,6 +85,9 @@ class ApplicationFlowIntegrationTests {
     @Autowired
     private PromotionRepository promotionRepository;
 
+    @MockitoSpyBean
+    private BookingRepository bookingRepository;
+
     @Autowired
     private LoyaltyService loyaltyService;
 
@@ -98,6 +111,11 @@ class ApplicationFlowIntegrationTests {
 
     @Autowired
     private AuditLogRepository auditLogRepository;
+
+    @AfterEach
+    void resetBookingRepositorySpy() {
+        reset(bookingRepository);
+    }
 
     @Test
     void authMeRequiresAuthentication() throws Exception {
@@ -334,6 +352,58 @@ class ApplicationFlowIntegrationTests {
         mockMvc.perform(statusPatch(adminToken, bookingId, "COMPLETED"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success", is(false)));
+    }
+
+    @Test
+    void cancellationRestoresPromotionUsageOnceAndRepeatedCancellationDoesNotRestoreAgain() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("P02-CANCEL-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("CANCELLED")));
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success", is(false)));
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
+    }
+
+    @Test
+    void cancellationWithoutPromotionDoesNotChangePromotionUsage() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion unrelatedPromotion = createActivePromotion("P02-NO-PROMO-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, null);
+
+        mockMvc.perform(statusPatch(adminToken, bookingId, "CANCELLED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("CANCELLED")));
+
+        assertThat(promotionRepository.findById(unrelatedPromotion.getId()).orElseThrow().getUsedCount()).isZero();
+    }
+
+    @Test
+    void bookingFailureAfterPromotionClaimRollsBackPromotionUsage() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Promotion promotion = createActivePromotion("P02-ROLLBACK-" + SEQUENCE.getAndIncrement());
+        doThrow(new DataIntegrityViolationException("forced booking persistence failure"))
+                .when(bookingRepository)
+                .save(any(Booking.class));
+
+        mockMvc.perform(post("/api/bookings")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bookingJson(customer, promotion.getId(), nextSlot())))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.success", is(false)));
+
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
     }
 
     @Test
@@ -814,6 +884,17 @@ class ApplicationFlowIntegrationTests {
             reward.setAddOnService(addOnService);
         }
         return rewardRepository.save(reward);
+    }
+
+    private Promotion createActivePromotion(String code) {
+        Promotion promotion = new Promotion();
+        promotion.setCode(code);
+        promotion.setTitle(code);
+        promotion.setDiscountType(DiscountType.FIXED_AMOUNT);
+        promotion.setDiscountValue(BigDecimal.TEN);
+        promotion.setStartAt(LocalDateTime.now().minusMinutes(1));
+        promotion.setEndAt(LocalDateTime.now().plusDays(1));
+        return promotionRepository.save(promotion);
     }
 
     private CustomerContext registerCustomerUnchecked() {
