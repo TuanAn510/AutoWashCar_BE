@@ -36,8 +36,10 @@ import com.shinecraft.server.vehicle.VehicleVerificationStatus;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.io.ClassPathResource;
@@ -81,7 +83,6 @@ public class DataSeeder implements CommandLineRunner {
             VehicleBrandRepository vehicleBrandRepository,
             VehicleModelRepository vehicleModelRepository,
             BookingRepository bookingRepository,
-            ObjectMapper objectMapper,
             PasswordEncoder passwordEncoder,
             @Value("${app.admin.seed-phone}") String adminPhone,
             @Value("${app.admin.seed-password}") String adminPassword,
@@ -103,7 +104,7 @@ public class DataSeeder implements CommandLineRunner {
         this.vehicleBrandRepository = vehicleBrandRepository;
         this.vehicleModelRepository = vehicleModelRepository;
         this.bookingRepository = bookingRepository;
-        this.objectMapper = objectMapper;
+        this.objectMapper = new ObjectMapper();
         this.passwordEncoder = passwordEncoder;
         this.adminPhone = adminPhone;
         this.adminPassword = adminPassword;
@@ -248,6 +249,7 @@ public class DataSeeder implements CommandLineRunner {
             Map<String, List<String>> catalog = objectMapper.readValue(
                     new ClassPathResource("vehicle-catalog.json").getInputStream(),
                     new TypeReference<>() {});
+            syncVehicleCatalog(catalog);
             catalog.forEach((brandName, modelNames) ->
                     createVehicleBrand(brandName, modelNames.toArray(String[]::new)));
         } catch (Exception exception) {
@@ -258,14 +260,38 @@ public class DataSeeder implements CommandLineRunner {
         }
     }
 
+    private void syncVehicleCatalog(Map<String, List<String>> catalog) {
+        Set<String> allowedBrands = catalog.keySet().stream()
+                .map(this::normalizeCatalogName)
+                .collect(java.util.stream.Collectors.toSet());
+        vehicleBrandRepository.findAll().forEach(brand -> {
+            boolean brandAllowed = allowedBrands.contains(normalizeCatalogName(brand.getName()));
+            brand.setActive(brandAllowed);
+
+            Set<String> allowedModels = new HashSet<>(catalog.getOrDefault(brand.getName(), List.of()).stream()
+                    .map(this::normalizeCatalogName)
+                    .toList());
+            vehicleModelRepository.findByBrandIdOrderByNameAsc(brand.getId()).forEach(model -> {
+                model.setActive(brandAllowed && allowedModels.contains(normalizeCatalogName(model.getName())));
+                vehicleModelRepository.save(model);
+            });
+            vehicleBrandRepository.save(brand);
+        });
+    }
+
     private void createVehicleBrand(String brandName, String... modelNames) {
         VehicleBrand brand = vehicleBrandRepository.findByNameIgnoreCase(brandName).orElseGet(() -> {
             VehicleBrand created = new VehicleBrand();
             created.setName(brandName);
             return vehicleBrandRepository.save(created);
         });
+        brand.setActive(true);
+        vehicleBrandRepository.save(brand);
         for (String modelName : modelNames) {
-            if (vehicleModelRepository.existsByBrandIdAndNameIgnoreCase(brand.getId(), modelName)) {
+            VehicleModel existing = vehicleModelRepository.findByBrandIdAndNameIgnoreCase(brand.getId(), modelName).orElse(null);
+            if (existing != null) {
+                existing.setActive(true);
+                vehicleModelRepository.save(existing);
                 continue;
             }
             VehicleModel model = new VehicleModel();
@@ -273,6 +299,10 @@ public class DataSeeder implements CommandLineRunner {
             model.setName(modelName);
             vehicleModelRepository.save(model);
         }
+    }
+
+    private String normalizeCatalogName(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private void seedStaffDemoData() {
