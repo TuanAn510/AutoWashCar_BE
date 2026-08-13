@@ -10,8 +10,12 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -49,6 +53,10 @@ public class Vehicle extends BaseEntity {
 
     @Column(nullable = false)
     private boolean isActive = true;
+
+    @OneToMany(mappedBy = "vehicle", fetch = FetchType.LAZY)
+    @OrderBy("sortOrder ASC")
+    private List<VehicleImage> images = new ArrayList<>();
 
     @Column(nullable = false)
     private LocalDateTime ownershipStartAt = LocalDateTime.now();
