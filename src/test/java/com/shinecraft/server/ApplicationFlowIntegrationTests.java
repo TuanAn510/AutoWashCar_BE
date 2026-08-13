@@ -10,6 +10,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -291,6 +292,91 @@ class ApplicationFlowIntegrationTests {
                                 .formatted(formattedPhone)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.user.phone", is(localPhone)));
+    }
+
+    @Test
+    void adminCanListVehicleDetailsAndManageCustomerVehicles() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+
+        mockMvc.perform(get("/api/vehicles")
+                        .header("Authorization", bearer(adminToken))
+                        .param("page", "1")
+                        .param("limit", "10")
+                        .param("keyword", customer.phone())
+                        .param("sortBy", "licensePlate")
+                        .param("sortOrder", "asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.pagination.page", is(1)))
+                .andExpect(jsonPath("$.pagination.limit", is(10)))
+                .andExpect(jsonPath("$.pagination.total", greaterThan(0)))
+                .andExpect(jsonPath("$.data[0]._id", is(String.valueOf(customer.vehicle().getId()))))
+                .andExpect(jsonPath("$.data[0].customerId._id", is(String.valueOf(customer.user().getId()))))
+                .andExpect(jsonPath("$.data[0].customerId.displayName", is(customer.user().getFullName())))
+                .andExpect(jsonPath("$.data[0].customerId.phone", is(customer.phone())));
+
+        mockMvc.perform(get("/api/vehicles/{id}", customer.vehicle().getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data._id", is(String.valueOf(customer.vehicle().getId()))))
+                .andExpect(jsonPath("$.data.customerId.phone", is(customer.phone())));
+
+        mockMvc.perform(patch("/api/vehicles/{id}", customer.vehicle().getId())
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "brand": "Honda",
+                                  "model": "CR-V",
+                                  "licensePlate": "ADMIN%d",
+                                  "year": 2024,
+                                  "carType": "suv"
+                                }
+                                """
+                                .formatted(SEQUENCE.getAndIncrement())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.brand", is("Honda")))
+                .andExpect(jsonPath("$.data.model", is("CR-V")))
+                .andExpect(jsonPath("$.data.year", is(2024)))
+                .andExpect(jsonPath("$.data.carType", is("suv")))
+                .andExpect(jsonPath("$.data.customerId.phone", is(customer.phone())));
+
+        mockMvc.perform(get("/api/vehicles")
+                        .header("Authorization", bearer(adminToken))
+                        .param("carType", "suv")
+                        .param("keyword", customer.phone()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total", is(1)))
+                .andExpect(jsonPath("$.data[0].carType", is("suv")));
+
+        mockMvc.perform(delete("/api/vehicles/{id}", customer.vehicle().getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.deletedAt", notNullValue()));
+
+        mockMvc.perform(get("/api/vehicles/{id}", customer.vehicle().getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void customerCannotListAllVehiclesOrManageAnotherCustomersVehicle() throws Exception {
+        CustomerContext firstCustomer = registerCustomer();
+        CustomerContext secondCustomer = registerCustomer();
+
+        mockMvc.perform(get("/api/vehicles").header("Authorization", bearer(firstCustomer.token())))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(patch("/api/vehicles/{id}", secondCustomer.vehicle().getId())
+                        .header("Authorization", bearer(firstCustomer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "brand": "Honda"
+                                }
+                                """))
+                .andExpect(status().isNotFound());
     }
 
     @Test

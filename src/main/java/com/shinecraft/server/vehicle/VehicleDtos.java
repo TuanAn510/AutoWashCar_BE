@@ -1,6 +1,7 @@
 package com.shinecraft.server.vehicle;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shinecraft.server.common.PaginationMeta;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDateTime;
@@ -8,6 +9,8 @@ import java.util.List;
 
 public final class VehicleDtos {
     private VehicleDtos() {}
+
+    public static final String DEFAULT_CAR_TYPE = "sedan";
 
     public record VehicleRequest(
             @Size(max = 20) String licensePlate,
@@ -19,6 +22,13 @@ public final class VehicleDtos {
             String carType) {
         public Integer resolvedYear() {
             return year != null ? year : manufactureYear;
+        }
+
+        public String resolvedCarType() {
+            if (carType == null || carType.isBlank()) {
+                return DEFAULT_CAR_TYPE;
+            }
+            return carType.trim().toLowerCase();
         }
     }
 
@@ -95,7 +105,7 @@ public final class VehicleDtos {
     public record VehicleResponse(
             Long id,
             @JsonProperty("_id") String uid,
-            Long customerId,
+            CustomerSummary customerId,
             String licensePlate,
             String brand,
             String model,
@@ -111,18 +121,36 @@ public final class VehicleDtos {
             return new VehicleResponse(
                     vehicle.getId(),
                     String.valueOf(vehicle.getId()),
-                    vehicle.getCustomer().getId(),
+                    CustomerSummary.from(vehicle.getCustomer()),
                     vehicle.getLicensePlate(),
                     vehicle.getBrand(),
                     vehicle.getModel(),
                     vehicle.getColor(),
                     vehicle.getManufactureYear(),
                     vehicle.getManufactureYear(),
-                    "sedan",
+                    vehicle.getCarType(),
                     List.of(),
                     vehicle.isActive() ? null : vehicle.getOwnershipEndAt(),
                     vehicle.getCreatedAt(),
                     vehicle.getUpdatedAt());
+        }
+    }
+
+    public record VehiclePage(List<VehicleResponse> vehicles, PaginationMeta pagination) {}
+
+    public record CustomerSummary(
+            Long id,
+            @JsonProperty("_id") String uid,
+            String displayName,
+            String phone,
+            String avatarUrl) {
+        public static CustomerSummary from(com.shinecraft.server.user.User customer) {
+            return new CustomerSummary(
+                    customer.getId(),
+                    String.valueOf(customer.getId()),
+                    customer.getFullName(),
+                    customer.getPhone(),
+                    null);
         }
     }
 }

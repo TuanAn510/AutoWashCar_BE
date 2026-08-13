@@ -44,6 +44,9 @@ public class Vehicle extends BaseEntity {
 
     private Integer manufactureYear;
 
+    @Column(nullable = false, length = 20)
+    private String carType = "sedan";
+
     @Column(nullable = false)
     private boolean isActive = true;
 
