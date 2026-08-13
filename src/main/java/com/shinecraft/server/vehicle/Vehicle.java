@@ -4,6 +4,8 @@ import com.shinecraft.server.common.BaseEntity;
 import com.shinecraft.server.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -57,6 +59,25 @@ public class Vehicle extends BaseEntity {
     @OneToMany(mappedBy = "vehicle", fetch = FetchType.LAZY)
     @OrderBy("sortOrder ASC")
     private List<VehicleImage> images = new ArrayList<>();
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "brand_id")
+    private VehicleBrand brandRef;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "model_id")
+    private VehicleModel modelRef;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private VehicleVerificationStatus verificationStatus = VehicleVerificationStatus.APPROVED;
+
+    @Column(columnDefinition = "NVARCHAR(MAX)")
+    private String verificationNote;
+
+    private LocalDateTime verifiedAt;
+
+    private Long verifiedBy;
 
     @Column(nullable = false)
     private LocalDateTime ownershipStartAt = LocalDateTime.now();

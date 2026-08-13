@@ -26,14 +26,20 @@ public class VehicleAccessRequestController {
     private final AuthService authService;
     private final VehicleAccessRequestRepository requestRepository;
     private final VehicleRepository vehicleRepository;
+    private final VehicleBrandRepository brandRepository;
+    private final VehicleModelRepository modelRepository;
 
     public VehicleAccessRequestController(
             AuthService authService,
             VehicleAccessRequestRepository requestRepository,
-            VehicleRepository vehicleRepository) {
+            VehicleRepository vehicleRepository,
+            VehicleBrandRepository brandRepository,
+            VehicleModelRepository modelRepository) {
         this.authService = authService;
         this.requestRepository = requestRepository;
         this.vehicleRepository = vehicleRepository;
+        this.brandRepository = brandRepository;
+        this.modelRepository = modelRepository;
     }
 
     @PostMapping(path = "/api/vehicle-access-requests", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -94,7 +100,9 @@ public class VehicleAccessRequestController {
         accessRequest.setReviewNote(request == null ? null : request.reviewNote());
         accessRequest.setReviewedAt(LocalDateTime.now());
 
-        if (status == VehicleAccessRequestStatus.APPROVED && accessRequest.getVehicle() != null) {
+        if (accessRequest.getRequestType() == VehicleAccessRequestType.BRAND_MODEL_VERIFICATION) {
+            reviewBrandModelVerification(accessRequest, status);
+        } else if (status == VehicleAccessRequestStatus.APPROVED && accessRequest.getVehicle() != null) {
             Vehicle vehicle = accessRequest.getVehicle();
             vehicle.setCustomer(accessRequest.getRequester());
             vehicle.setOwnershipStartAt(LocalDateTime.now());
@@ -102,6 +110,87 @@ public class VehicleAccessRequestController {
         }
 
         return VehicleAccessRequestResponse.from(requestRepository.save(accessRequest));
+    }
+
+    private void reviewBrandModelVerification(VehicleAccessRequest accessRequest, VehicleAccessRequestStatus status) {
+        Vehicle vehicle = accessRequest.getVehicle();
+        if (vehicle == null) {
+            return;
+        }
+        User reviewer = authService.currentUser();
+        if (status == VehicleAccessRequestStatus.APPROVED) {
+            VehicleBrand brand = resolveOrCreateBrand(accessRequest, vehicle);
+            VehicleModel model = resolveOrCreateModel(accessRequest, vehicle, brand);
+            if (brand != null) {
+                vehicle.setBrandRef(brand);
+                vehicle.setBrand(brand.getName());
+            }
+            if (model != null) {
+                vehicle.setModelRef(model);
+                vehicle.setModel(model.getName());
+            }
+            vehicle.setVerificationStatus(VehicleVerificationStatus.APPROVED);
+            vehicle.setVerifiedAt(LocalDateTime.now());
+            vehicle.setVerifiedBy(reviewer.getId());
+            vehicle.setVerificationNote(accessRequest.getReviewNote());
+        } else {
+            vehicle.setVerificationStatus(VehicleVerificationStatus.REJECTED);
+            vehicle.setVerifiedAt(LocalDateTime.now());
+            vehicle.setVerifiedBy(reviewer.getId());
+            vehicle.setVerificationNote(accessRequest.getReviewNote());
+        }
+        vehicleRepository.save(vehicle);
+    }
+
+    private VehicleBrand resolveOrCreateBrand(VehicleAccessRequest accessRequest, Vehicle vehicle) {
+        if (accessRequest.getBrandRef() != null) {
+            return accessRequest.getBrandRef();
+        }
+        String name = hasText(accessRequest.getSuggestedBrandName())
+                ? accessRequest.getSuggestedBrandName().trim()
+                : (hasText(vehicle.getBrand()) ? vehicle.getBrand().trim() : null);
+        if (name == null || isOther(name)) {
+            return null;
+        }
+        return brandRepository
+                .findByNameIgnoreCase(name)
+                .orElseGet(() -> {
+                    VehicleBrand created = new VehicleBrand();
+                    created.setName(name);
+                    return brandRepository.save(created);
+                });
+    }
+
+    private VehicleModel resolveOrCreateModel(VehicleAccessRequest accessRequest, Vehicle vehicle, VehicleBrand brand) {
+        if (accessRequest.getModelRef() != null) {
+            return accessRequest.getModelRef();
+        }
+        String name = hasText(accessRequest.getSuggestedModelName())
+                ? accessRequest.getSuggestedModelName().trim()
+                : (hasText(vehicle.getModel()) ? vehicle.getModel().trim() : null);
+        if (name == null || isOther(name)) {
+            return null;
+        }
+        if (brand != null) {
+            return modelRepository
+                    .findByBrandIdAndNameIgnoreCase(brand.getId(), name)
+                    .orElseGet(() -> {
+                        VehicleModel created = new VehicleModel();
+                        created.setBrand(brand);
+                        created.setName(name);
+                        created.setNew(true);
+                        return modelRepository.save(created);
+                    });
+        }
+        return null;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private boolean isOther(String value) {
+        return value != null && value.trim().equalsIgnoreCase("OTHER");
     }
 
     private VehicleAccessRequestStatus parseStatus(String status) {
@@ -155,12 +244,17 @@ public class VehicleAccessRequestController {
             String relationship,
             String note,
             String status,
+            String requestType,
             String reviewNote,
             LocalDateTime createdAt,
             LocalDateTime reviewedAt,
             RequesterSummary requesterId,
             VehicleDtos.VehicleResponse vehicleId,
-            List<Object> documents) {
+            List<Object> documents,
+            String suggestedBrandName,
+            String suggestedModelName,
+            Long brandId,
+            Long modelId) {
         public static VehicleAccessRequestResponse from(VehicleAccessRequest request) {
             return new VehicleAccessRequestResponse(
                     String.valueOf(request.getId()),
@@ -168,6 +262,9 @@ public class VehicleAccessRequestController {
                     request.getRelationship(),
                     request.getNote(),
                     request.getStatus().name().toLowerCase(),
+                    request.getRequestType() == null
+                            ? "access_request"
+                            : request.getRequestType().name().toLowerCase(),
                     request.getReviewNote(),
                     request.getCreatedAt(),
                     request.getReviewedAt(),
@@ -176,7 +273,11 @@ public class VehicleAccessRequestController {
                             request.getRequester().getFullName(),
                             request.getRequester().getPhone()),
                     request.getVehicle() == null ? null : VehicleDtos.VehicleResponse.from(request.getVehicle()),
-                    List.of());
+                    List.of(),
+                    request.getSuggestedBrandName(),
+                    request.getSuggestedModelName(),
+                    request.getBrandRef() == null ? null : request.getBrandRef().getId(),
+                    request.getModelRef() == null ? null : request.getModelRef().getId());
         }
     }
 }
