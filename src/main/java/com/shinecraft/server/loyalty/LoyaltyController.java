@@ -56,6 +56,14 @@ public class LoyaltyController {
                 loyaltyService.customerTransactions(customerId));
     }
 
+    @GetMapping("/api/loyalty/customers/{customerId}/redemptions")
+    @PreAuthorize("hasAnyAuthority('ROLE_STAFF', 'ROLE_ADMIN')")
+    ApiListResponse<LoyaltyDtos.RedemptionResponse> customerRedemptions(@PathVariable Long customerId) {
+        return ApiListResponse.ok(
+                "Customer redemptions retrieved successfully",
+                loyaltyService.customerRedemptions(customerId));
+    }
+
     @GetMapping("/api/loyalty/tiers")
     ApiResponse<List<LoyaltyDtos.TierResponse>> tiers() {
         return ApiResponse.ok("Membership tiers retrieved successfully", loyaltyService.tiers());

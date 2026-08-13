@@ -151,8 +151,29 @@ public class LoyaltyService {
                 .findById(customerId)
                 .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
-        return transactionRepository.findByCustomerOrderByCreatedAtDesc(customer).stream()
-                .map(LoyaltyDtos.TransactionResponse::from)
+        List<LoyaltyTransaction> transactions = transactionRepository
+                .findByCustomerOrderByCreatedAtAsc(customer);
+        int running = 0;
+        java.util.Map<Long, Integer> balanceByTransactionId = new java.util.LinkedHashMap<>();
+        for (LoyaltyTransaction transaction : transactions) {
+            running += transaction.getPoints();
+            balanceByTransactionId.put(transaction.getId(), running);
+        }
+        return transactions.stream()
+                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .map(transaction -> LoyaltyDtos.TransactionResponse.from(
+                        transaction, balanceByTransactionId.get(transaction.getId())))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<LoyaltyDtos.RedemptionResponse> customerRedemptions(Long customerId) {
+        User customer = userRepository
+                .findById(customerId)
+                .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
+        return redemptionRepository.findByCustomerOrderByRedeemedAtDesc(customer).stream()
+                .map(LoyaltyDtos.RedemptionResponse::from)
                 .toList();
     }
 

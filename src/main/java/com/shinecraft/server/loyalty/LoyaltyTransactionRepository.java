@@ -11,6 +11,8 @@ import org.springframework.data.repository.query.Param;
 public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTransaction, Long> {
     List<LoyaltyTransaction> findByCustomerOrderByCreatedAtDesc(User customer);
 
+    List<LoyaltyTransaction> findByCustomerOrderByCreatedAtAsc(User customer);
+
     List<LoyaltyTransaction> findByTypeAndExpiresAtBeforeAndPointsGreaterThan(
             LoyaltyTransactionType type, LocalDateTime expiresAt, Integer points);
 
