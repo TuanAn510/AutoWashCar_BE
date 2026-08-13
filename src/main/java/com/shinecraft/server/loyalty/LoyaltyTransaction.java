@@ -48,7 +48,7 @@ public class LoyaltyTransaction {
     @Column(nullable = false)
     private Integer points;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     private LocalDateTime expiresAt;

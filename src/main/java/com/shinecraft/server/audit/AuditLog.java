@@ -36,9 +36,9 @@ public class AuditLog extends BaseEntity {
     @Column(nullable = false, length = 80)
     private String action;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String beforeValue;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String afterValue;
 }

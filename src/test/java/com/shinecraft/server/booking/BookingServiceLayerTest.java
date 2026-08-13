@@ -67,7 +67,8 @@ class BookingServiceLayerTest {
                 authService,
                 userRepository,
                 mock(AuditTrailService.class),
-                10000);
+                10000,
+                true);
 
         customer = new User();
         customer.setRole(UserRole.ROLE_ADMIN);

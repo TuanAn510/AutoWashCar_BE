@@ -37,7 +37,7 @@ public class MembershipTier extends BaseEntity {
     @Column(nullable = false)
     private Integer priorityLevel;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false)

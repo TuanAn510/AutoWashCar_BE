@@ -7,8 +7,14 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface BookingRepository extends JpaRepository<Booking, Long> {
+    @EntityGraph(attributePaths = {"customer", "vehicle", "assignedStaff", "services"})
+    List<Booking> findAllByOrderByScheduledAtDesc();
+
     @EntityGraph(attributePaths = {"customer", "vehicle", "services"})
     List<Booking> findByCustomerOrderByScheduledAtDesc(User customer);
+
+    @EntityGraph(attributePaths = {"customer", "vehicle", "services"})
+    List<Booking> findByCustomerOrderByCreatedAtDesc(User customer);
 
     @EntityGraph(attributePaths = {"customer", "vehicle", "assignedStaff", "services"})
     List<Booking> findByAssignedStaffOrderByScheduledAtDesc(User assignedStaff);

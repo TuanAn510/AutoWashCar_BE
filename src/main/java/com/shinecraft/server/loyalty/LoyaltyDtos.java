@@ -214,8 +214,7 @@ public final class LoyaltyDtos {
     public record RedemptionResponse(
             Long id,
             @JsonProperty("_id") String uid,
-            Long rewardId,
-            String rewardName,
+            RewardResponse rewardId,
             String code,
             Integer pointsUsed,
             String status,
@@ -225,8 +224,7 @@ public final class LoyaltyDtos {
             return new RedemptionResponse(
                     redemption.getId(),
                     String.valueOf(redemption.getId()),
-                    redemption.getReward().getId(),
-                    redemption.getReward().getName(),
+                    RewardResponse.from(redemption.getReward()),
                     redemption.getCode(),
                     redemption.getPointsUsed(),
                     redemption.getStatus().name().toLowerCase(),
@@ -238,8 +236,7 @@ public final class LoyaltyDtos {
     public record RedemptionEnvelope(
             Long id,
             @JsonProperty("_id") String uid,
-            Long rewardId,
-            String rewardName,
+            RewardResponse rewardId,
             String code,
             Integer pointsUsed,
             String status,
@@ -251,7 +248,6 @@ public final class LoyaltyDtos {
                     redemption.id(),
                     redemption.uid(),
                     redemption.rewardId(),
-                    redemption.rewardName(),
                     redemption.code(),
                     redemption.pointsUsed(),
                     redemption.status(),

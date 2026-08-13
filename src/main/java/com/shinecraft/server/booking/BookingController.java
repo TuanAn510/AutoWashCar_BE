@@ -2,6 +2,7 @@ package com.shinecraft.server.booking;
 
 import com.shinecraft.server.common.ApiResponse;
 import com.shinecraft.server.common.ApiSummaryListResponse;
+import com.shinecraft.server.common.PaginationMeta;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -50,21 +51,55 @@ public class BookingController {
     }
 
     @GetMapping("/api/appointments/staff/my")
-    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> myStaffAppointments() {
-        List<BookingDtos.AppointmentResponse> appointments = bookingService.myStaffAppointments();
-        return ApiSummaryListResponse.ok(
+    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> myStaffAppointments(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String staffId,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(defaultValue = "scheduledAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortOrder) {
+        BookingDtos.AppointmentFilterParams params = new BookingDtos.AppointmentFilterParams(
+                search, status, staffId, dateFrom, dateTo, page, limit, sortBy, sortOrder);
+        BookingDtos.AppointmentPageResponse result = bookingService.myStaffAppointments(params);
+        return new ApiSummaryListResponse<>(
+                true,
                 "My staff appointments retrieved successfully",
-                appointments,
-                summarizeAppointmentResponses(appointments));
+                result.appointments(),
+                new PaginationMeta(
+                        result.pagination().page(),
+                        result.pagination().limit(),
+                        result.pagination().total(),
+                        result.pagination().totalPages()),
+                result.summary());
     }
 
     @GetMapping("/api/appointments")
-    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> appointments() {
-        List<BookingDtos.AppointmentResponse> appointments = bookingService.allAppointments();
-        return ApiSummaryListResponse.ok(
+    ApiSummaryListResponse<BookingDtos.AppointmentResponse, BookingDtos.AppointmentStatusSummary> appointments(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String staffId,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(defaultValue = "scheduledAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortOrder) {
+        BookingDtos.AppointmentFilterParams params = new BookingDtos.AppointmentFilterParams(
+                search, status, staffId, dateFrom, dateTo, page, limit, sortBy, sortOrder);
+        BookingDtos.AppointmentPageResponse result = bookingService.allAppointments(params);
+        return new ApiSummaryListResponse<>(
+                true,
                 "Appointments retrieved successfully",
-                appointments,
-                summarizeAppointmentResponses(appointments));
+                result.appointments(),
+                new PaginationMeta(
+                        result.pagination().page(),
+                        result.pagination().limit(),
+                        result.pagination().total(),
+                        result.pagination().totalPages()),
+                result.summary());
     }
 
     @GetMapping("/api/appointments/{id}")

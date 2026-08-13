@@ -31,6 +31,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
@@ -63,6 +64,7 @@ public class BookingServiceLayer {
     private final UserRepository userRepository;
     private final AuditTrailService auditTrailService;
     private final int pointsAmountUnit;
+    private final boolean enforceScheduleTime;
 
     public BookingServiceLayer(
             BookingRepository bookingRepository,
@@ -74,6 +76,7 @@ public class BookingServiceLayer {
             AuthService authService,
             UserRepository userRepository,
             AuditTrailService auditTrailService,
+            @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
         this.vehicleRepository = vehicleRepository;
@@ -85,6 +88,7 @@ public class BookingServiceLayer {
         this.userRepository = userRepository;
         this.auditTrailService = auditTrailService;
         this.pointsAmountUnit = pointsAmountUnit;
+        this.enforceScheduleTime = enforceScheduleTime;
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
@@ -104,6 +108,17 @@ public class BookingServiceLayer {
         List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(requestedServiceIds));
         if (selectedServices.size() != requestedServiceIds.size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
+        }
+
+        // Validate: at most 1 service per category (e.g. only 1 of the 3 car wash services)
+        Map<Long, List<CarWashService>> servicesByCategory = selectedServices.stream()
+                .collect(Collectors.groupingBy(s -> s.getCategory().getId()));
+        for (Map.Entry<Long, List<CarWashService>> entry : servicesByCategory.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                String categoryName = entry.getValue().get(0).getCategory().getName();
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "Chỉ được chọn 1 dịch vụ trong danh mục \"" + categoryName + "\"");
+            }
         }
 
         RewardRedemption redemption = null;
@@ -220,29 +235,142 @@ public class BookingServiceLayer {
 
     @Transactional(readOnly = true)
     public List<BookingDtos.AppointmentResponse> myAppointments() {
-        return bookingRepository.findByCustomerOrderByScheduledAtDesc(authService.currentUser()).stream()
+        return bookingRepository.findByCustomerOrderByCreatedAtDesc(authService.currentUser()).stream()
+                .sorted(Comparator.comparing(
+                        (Booking b) -> b.getCompletedAt() != null ? b.getCompletedAt() : b.getCreatedAt())
+                        .reversed())
                 .map(BookingDtos.AppointmentResponse::from)
                 .toList();
     }
 
     @Transactional(readOnly = true)
-    public List<BookingDtos.AppointmentResponse> myStaffAppointments() {
+    public BookingDtos.AppointmentPageResponse myStaffAppointments(BookingDtos.AppointmentFilterParams params) {
         User staff = authService.currentUser();
+        List<Booking> bookings;
         if (staff.getRole() == UserRole.ROLE_ADMIN) {
-            return allAppointments();
+            bookings = bookingRepository.findAllByOrderByScheduledAtDesc();
+        } else {
+            bookings = bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff);
         }
-        return bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff).stream()
-                .map(BookingDtos.AppointmentResponse::from)
-                .toList();
+        return filterAndPaginateBookings(bookings, params);
     }
 
     @Transactional(readOnly = true)
-    public List<BookingDtos.AppointmentResponse> allAppointments() {
-        requireAdmin(authService.currentUser());
-        return bookingRepository.findAll().stream()
-                .sorted(Comparator.comparing(Booking::getScheduledAt).reversed())
+    public BookingDtos.AppointmentPageResponse allAppointments(BookingDtos.AppointmentFilterParams params) {
+        List<Booking> bookings = bookingRepository.findAllByOrderByScheduledAtDesc();
+        return filterAndPaginateBookings(bookings, params);
+    }
+
+    private BookingDtos.AppointmentPageResponse filterAndPaginateBookings(
+            List<Booking> bookings, BookingDtos.AppointmentFilterParams params) {
+        // Filter
+        var stream = bookings.stream();
+        if (params.search() != null && !params.search().isBlank()) {
+            String keyword = params.search().toLowerCase().trim();
+            stream = stream.filter(booking -> matchesSearch(booking, keyword));
+        }
+        if (params.status() != null && !params.status().isBlank()) {
+            stream = stream.filter(booking -> matchesStatus(booking, params.status()));
+        }
+        if (params.staffId() != null && !params.staffId().isBlank()) {
+            stream = stream.filter(booking ->
+                    booking.getAssignedStaff() != null
+                            && String.valueOf(booking.getAssignedStaff().getId()).equals(params.staffId()));
+        }
+        if (params.dateFrom() != null && !params.dateFrom().isBlank()) {
+            LocalDateTime dateFrom = LocalDateTime.parse(params.dateFrom());
+            stream = stream.filter(booking ->
+                    !booking.getScheduledAt().isBefore(dateFrom));
+        }
+        if (params.dateTo() != null && !params.dateTo().isBlank()) {
+            LocalDateTime dateTo = LocalDateTime.parse(params.dateTo());
+            stream = stream.filter(booking ->
+                    !booking.getScheduledAt().isAfter(dateTo));
+        }
+
+        // Sort
+        Comparator<Booking> comparator = buildComparator(params.sortBy(), params.sortOrder());
+        stream = stream.sorted(comparator);
+
+        List<Booking> filtered = stream.toList();
+
+        // Build summary (before pagination)
+        BookingDtos.AppointmentStatusSummary summary = BookingDtos.AppointmentStatusSummary.from(filtered);
+
+        // Paginate
+        int page = Math.max(params.page() - 1, 0); // 0-based for internal use
+        int limit = Math.min(Math.max(params.limit(), 1), 100);
+        int total = filtered.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) total / limit));
+        int fromIndex = page * limit;
+        int toIndex = Math.min(fromIndex + limit, total);
+
+        List<Booking> paged = fromIndex < total
+                ? filtered.subList(fromIndex, toIndex)
+                : List.of();
+
+        List<BookingDtos.AppointmentResponse> appointments = paged.stream()
                 .map(BookingDtos.AppointmentResponse::from)
                 .toList();
+
+        BookingDtos.PaginationMeta pagination = new BookingDtos.PaginationMeta(
+                page + 1, limit, total, totalPages);
+
+        return new BookingDtos.AppointmentPageResponse(appointments, pagination, summary);
+    }
+
+    private boolean matchesSearch(Booking booking, String keyword) {
+        if (booking.getCustomer() != null) {
+            if (booking.getCustomer().getFullName() != null
+                    && booking.getCustomer().getFullName().toLowerCase().contains(keyword)) {
+                return true;
+            }
+            if (booking.getCustomer().getPhone() != null
+                    && booking.getCustomer().getPhone().contains(keyword)) {
+                return true;
+            }
+        }
+        if (booking.getVehicle() != null && booking.getVehicle().getLicensePlate() != null
+                && booking.getVehicle().getLicensePlate().toLowerCase().contains(keyword)) {
+            return true;
+        }
+        // Match by booking ID
+        try {
+            if (String.valueOf(booking.getId()).equals(keyword)) {
+                return true;
+            }
+        } catch (NumberFormatException ignored) {
+            // keyword is not a number, skip ID match
+        }
+        return false;
+    }
+
+    private boolean matchesStatus(Booking booking, String frontendStatus) {
+        return switch (frontendStatus.toLowerCase()) {
+            case "pending" -> booking.getStatus() == BookingStatus.PENDING;
+            case "confirmed" -> booking.getStatus() == BookingStatus.CONFIRMED
+                    || booking.getStatus() == BookingStatus.IN_QUEUE;
+            case "in_progress" -> booking.getStatus() == BookingStatus.IN_PROGRESS;
+            case "completed" -> booking.getStatus() == BookingStatus.COMPLETED;
+            case "cancelled" -> booking.getStatus() == BookingStatus.CANCELLED;
+            default -> true; // unknown status, no filter
+        };
+    }
+
+    private Comparator<Booking> buildComparator(String sortBy, String sortOrder) {
+        boolean desc = !"asc".equalsIgnoreCase(sortOrder);
+        Comparator<Booking> comparator = switch (sortBy != null ? sortBy : "activity") {
+            case "createdAt" -> Comparator.comparing(Booking::getCreatedAt);
+            case "scheduledAt" -> Comparator.comparing(Booking::getScheduledAt);
+            case "status" -> Comparator.comparing(Booking::getStatus);
+            case "finalAmount" -> Comparator.comparing(Booking::getFinalAmount);
+            default -> Comparator.comparing(
+                    (Booking b) -> b.getCompletedAt() != null ? b.getCompletedAt() : b.getCreatedAt());
+        };
+        if (desc) {
+            comparator = comparator.reversed();
+        }
+        return comparator;
     }
 
     @Transactional(readOnly = true)
@@ -319,9 +447,15 @@ public class BookingServiceLayer {
         String beforeValue = bookingAuditValue(booking);
         BookingStatus currentStatus = booking.getStatus();
         validateStatusTransition(currentStatus, status);
+        if (enforceScheduleTime
+                && (status == BookingStatus.IN_PROGRESS || status == BookingStatus.COMPLETED)
+                && booking.getScheduledAt().isAfter(LocalDateTime.now())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "Không thể bắt đầu hoặc hoàn thành lịch hẹn trước thời gian đã lên lịch");
+        }
         if (currentStatus == BookingStatus.CONFIRMED
-                && (status == BookingStatus.IN_QUEUE || status == BookingStatus.IN_PROGRESS)
-                && booking.getCheckInAt() == null) {
+                    && (status == BookingStatus.IN_QUEUE || status == BookingStatus.IN_PROGRESS)
+                    && booking.getCheckInAt() == null) {
             booking.setCheckInAt(LocalDateTime.now());
         }
         if (status == BookingStatus.CANCELLED) {
@@ -333,6 +467,14 @@ public class BookingServiceLayer {
             int points = booking.getFinalAmount()
                     .divide(BigDecimal.valueOf(pointsAmountUnit), 0, RoundingMode.DOWN)
                     .intValue();
+
+            // Double points if booking includes the 850K service (Chăm Sóc Toàn Diện)
+            boolean has850KService = booking.getServices().stream()
+                    .anyMatch(bs -> bs.getPrice().compareTo(new BigDecimal("850000")) == 0);
+            if (has850KService) {
+                points = points * 2;
+            }
+
             booking.setEarnedPoints(points);
             if (points > 0) {
                 loyaltyService.earnPoints(

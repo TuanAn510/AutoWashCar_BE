@@ -50,7 +50,7 @@ public class SurveyEventLog {
     @Column(length = 120)
     private String action;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String metadataJson;
 
     @Column(length = 64)
