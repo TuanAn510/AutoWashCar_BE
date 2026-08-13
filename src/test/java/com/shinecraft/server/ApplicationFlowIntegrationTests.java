@@ -370,6 +370,143 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void adminReportsReturnLiveConnectedStatistics() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("REPORT-" + SEQUENCE.getAndIncrement());
+        LocalDateTime scheduledAt = nextSlot();
+        Long bookingId = createBooking(customer, promotion.getId(), scheduledAt);
+        User staff = firstActiveStaff();
+        LocalDateTime rescheduledAt = nextSlot();
+        String startDate = LocalDate.now().minusDays(1).toString();
+        String endDate = rescheduledAt.toLocalDate().plusDays(1).toString();
+
+        mockMvc.perform(patch("/api/appointments/{id}/assign-staff", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "staffId": %d
+                                }
+                                """
+                                .formatted(staff.getId())))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/appointments/{id}/reschedule", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "scheduledAt": "%s"
+                                }
+                                """
+                                .formatted(rescheduledAt)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "method": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "paymentStatus": "paid",
+                                  "paymentMethod": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
+        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
+        updateBookingStatus(adminToken, bookingId, "COMPLETED");
+
+        assertThat(operationalAuditActionsForBooking(bookingId))
+                .contains(
+                        "BOOKING_CREATED",
+                        "STAFF_ASSIGNED",
+                        "BOOKING_RESCHEDULED",
+                        "PAYMENT_CREATED",
+                        "PAYMENT_STATUS_CHANGED",
+                        "BOOKING_STATUS_CHANGED");
+
+        mockMvc.perform(get("/api/dashboard/overview").header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalVehicles", greaterThan(0)))
+                .andExpect(jsonPath("$.data.totalCompletedAppointments", greaterThan(0)))
+                .andExpect(jsonPath("$.data.totalServicesCompleted", greaterThan(0)))
+                .andExpect(jsonPath("$.data.totalLoyaltyMembers", greaterThan(0)))
+                .andExpect(jsonPath("$.data.revenue.total", greaterThan(0.0)));
+
+        mockMvc.perform(get("/api/reports/revenue")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate)
+                        .param("period", "monthly"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.period", is("monthly")))
+                .andExpect(jsonPath("$.data.data.length()", greaterThan(0)))
+                .andExpect(jsonPath("$.data.data[0].period", notNullValue()))
+                .andExpect(jsonPath("$.data.data[0].revenue", greaterThan(0.0)));
+
+        mockMvc.perform(get("/api/reports/appointments")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.completedAppointments", greaterThan(0)))
+                .andExpect(jsonPath("$.data.groupedByMonth.length()", greaterThan(0)));
+
+        mockMvc.perform(get("/api/reports/services")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate)
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.mostBookedServices.length()", greaterThan(0)))
+                .andExpect(jsonPath("$.data.mostBookedServices[0].usageCount", greaterThan(0)));
+
+        mockMvc.perform(get("/api/reports/loyalty")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.pointsIssued", greaterThan(0)))
+                .andExpect(jsonPath("$.data.membershipTierDistribution.length()", greaterThan(0)));
+
+        mockMvc.perform(get("/api/reports/promotions")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.activePromotions", greaterThan(0)))
+                .andExpect(jsonPath("$.data.promotionUsageCount", greaterThan(0)))
+                .andExpect(jsonPath("$.data.distributionByType.length()", greaterThan(0)));
+
+        mockMvc.perform(get("/api/reports/vehicles")
+                        .header("Authorization", bearer(adminToken))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalVehicles", greaterThan(0)))
+                .andExpect(jsonPath("$.data.mostCommonVehicleBrands.length()", greaterThan(0)));
+
+        mockMvc.perform(get("/api/reports/revenue")
+                        .header("Authorization", bearer(customer.token()))
+                        .param("startDate", startDate)
+                        .param("endDate", endDate))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void loyaltyAccountStatsReflectEarnRedeemAndExpireLedger() throws Exception {
         CustomerContext customer = registerCustomer();
         Reward reward = createReward("Stats reward", RewardType.DISCOUNT_CODE, null, "1000");
@@ -956,6 +1093,61 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void staffCanOnlyAccessAndUpdateAssignedOperationalData() throws Exception {
+        CustomerContext assignedCustomer = registerCustomer();
+        CustomerContext unassignedCustomer = registerCustomer();
+        String adminToken = loginAdmin();
+        String staffToken = loginStaff();
+        User staff = firstActiveStaff();
+        Long assignedBookingId = createBooking(assignedCustomer, null);
+        Long unassignedBookingId = createBooking(unassignedCustomer, null);
+
+        mockMvc.perform(patch("/api/appointments/{id}/assign-staff", assignedBookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "staffId": %d
+                                }
+                                """
+                                .formatted(staff.getId())))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/appointments").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/service-histories").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/users").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/users/staffs/workload").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/appointments/{id}", unassignedBookingId)
+                        .header("Authorization", bearer(staffToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(appointmentStatusPatch(staffToken, unassignedBookingId, "CONFIRMED"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "CONFIRMED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("confirmed")));
+        mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "IN_PROGRESS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("in_progress")));
+
+        mockMvc.perform(get("/api/appointments/staff/my").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*]._id", hasItem(String.valueOf(assignedBookingId))))
+                .andExpect(jsonPath("$.data[*]._id").value(org.hamcrest.Matchers.not(hasItem(String.valueOf(unassignedBookingId)))));
+
+        mockMvc.perform(get("/api/service-histories/staff/my").header("Authorization", bearer(staffToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*]._id", hasItem(String.valueOf(assignedBookingId))))
+                .andExpect(jsonPath("$.data[*]._id").value(org.hamcrest.Matchers.not(hasItem(String.valueOf(unassignedBookingId)))));
+    }
+
+    @Test
     void adminCanRescheduleAppointment() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();
@@ -1076,6 +1268,19 @@ class ApplicationFlowIntegrationTests {
                         .formatted(statusValue));
     }
 
+    private org.springframework.test.web.servlet.RequestBuilder appointmentStatusPatch(
+            String token, Long bookingId, String statusValue) {
+        return patch("/api/appointments/{id}/status", bookingId)
+                .header("Authorization", bearer(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {
+                          "status": "%s"
+                        }
+                        """
+                        .formatted(statusValue));
+    }
+
     private String bookingJson(CustomerContext customer, Long promotionId, LocalDateTime scheduledAt) {
         return bookingJson(customer, promotionId, null, scheduledAt);
     }
@@ -1164,6 +1369,16 @@ class ApplicationFlowIntegrationTests {
                 .filter(audit -> audit.getAction().equals("PROMOTION_USED")
                         || audit.getAction().equals("PROMOTION_RESTORED"))
                 .filter(audit -> audit.getAfterValue().contains("\"bookingId\":" + bookingId + ","))
+                .toList();
+    }
+
+    private List<String> operationalAuditActionsForBooking(Long bookingId) {
+        String bookingToken = "\"bookingId\":" + bookingId + ",";
+        return auditLogRepository.findAll().stream()
+                .filter(audit ->
+                        (audit.getBeforeValue() != null && audit.getBeforeValue().contains(bookingToken))
+                                || (audit.getAfterValue() != null && audit.getAfterValue().contains(bookingToken)))
+                .map(AuditLog::getAction)
                 .toList();
     }
 

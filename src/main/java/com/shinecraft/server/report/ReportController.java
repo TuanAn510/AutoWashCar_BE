@@ -2,13 +2,15 @@ package com.shinecraft.server.report;
 
 import com.shinecraft.server.common.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.math.BigDecimal;
-import java.util.List;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Reports")
@@ -32,88 +34,54 @@ public class ReportController {
                 "Dashboard retrieved successfully",
                 Map.of(
                         "totalCustomers", dashboard.customers(),
-                        "totalVehicles", 0,
+                        "totalVehicles", dashboard.vehicles(),
                         "totalAppointments", dashboard.bookings(),
-                        "totalCompletedAppointments", 0,
-                        "totalServicesCompleted", 0,
+                        "totalCompletedAppointments", dashboard.completedBookings(),
+                        "totalServicesCompleted", dashboard.completedServices(),
                         "totalActivePromotions", dashboard.activePromotions(),
-                        "totalLoyaltyMembers", dashboard.customers(),
+                        "totalLoyaltyMembers", dashboard.loyaltyMembers(),
                         "totalPointsIssued", dashboard.issuedPoints(),
                         "totalPointsRedeemed", dashboard.redeemedPoints(),
                         "revenue", Map.of("total", dashboard.revenue(), "source", "bookings")));
     }
 
     @GetMapping("/api/reports/revenue")
-    ApiResponse<Map<String, Object>> revenue() {
+    ApiResponse<ReportDtos.RevenueReport> revenue(@RequestParam Map<String, String> params) {
         return ApiResponse.ok(
                 "Revenue report retrieved successfully",
-                Map.of("period", "monthly", "source", "bookings", "data", List.of()));
+                reportService.revenue(range(params), params.getOrDefault("period", "monthly")));
     }
 
     @GetMapping("/api/reports/appointments")
-    ApiResponse<Map<String, Object>> appointments() {
-        return ApiResponse.ok(
-                "Appointment report retrieved successfully",
-                Map.of(
-                        "totalAppointments", reportService.dashboard().bookings(),
-                        "completedAppointments", 0,
-                        "cancelledAppointments", 0,
-                        "pendingAppointments", 0,
-                        "completionRate", 0,
-                        "cancellationRate", 0,
-                        "groupedByMonth", List.of()));
+    ApiResponse<ReportDtos.AppointmentReport> appointments(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Appointment report retrieved successfully", reportService.appointments(range(params)));
     }
 
     @GetMapping("/api/reports/customers")
-    ApiResponse<Map<String, Object>> customers() {
-        long total = reportService.dashboard().customers();
-        return ApiResponse.ok(
-                "Customer report retrieved successfully",
-                Map.of(
-                        "totalCustomers", total,
-                        "newCustomersInRange", 0,
-                        "newCustomersThisMonth", 0,
-                        "activeCustomers", total,
-                        "returningCustomers", 0));
+    ApiResponse<ReportDtos.CustomerReport> customers(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Customer report retrieved successfully", reportService.customers(range(params)));
     }
 
     @GetMapping("/api/reports/services")
-    ApiResponse<Map<String, Object>> services() {
+    ApiResponse<ReportDtos.ServiceReport> services(@RequestParam Map<String, String> params) {
         return ApiResponse.ok(
                 "Service report retrieved successfully",
-                Map.of("limit", 5, "mostBookedServices", List.of(), "leastBookedServices", List.of()));
+                reportService.services(range(params), parseLimit(params.get("limit"))));
     }
 
     @GetMapping("/api/reports/loyalty")
-    ApiResponse<Map<String, Object>> loyalty() {
-        ReportDtos.DashboardResponse dashboard = reportService.dashboard();
-        return ApiResponse.ok(
-                "Loyalty report retrieved successfully",
-                Map.of(
-                        "totalLoyaltyMembers", dashboard.customers(),
-                        "pointsIssued", dashboard.issuedPoints(),
-                        "pointsRedeemed", dashboard.redeemedPoints(),
-                        "pointsExpired", 0,
-                        "membershipTierDistribution", List.of()));
+    ApiResponse<ReportDtos.LoyaltyReport> loyalty(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Loyalty report retrieved successfully", reportService.loyalty(range(params)));
     }
 
     @GetMapping("/api/reports/promotions")
-    ApiResponse<Map<String, Object>> promotions() {
-        return ApiResponse.ok(
-                "Promotion report retrieved successfully",
-                Map.of(
-                        "totalPromotions", reportService.dashboard().activePromotions(),
-                        "activePromotions", reportService.dashboard().activePromotions(),
-                        "expiredPromotions", 0,
-                        "promotionUsageCount", 0,
-                        "distributionByType", List.of()));
+    ApiResponse<ReportDtos.PromotionReport> promotions(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Promotion report retrieved successfully", reportService.promotions(range(params)));
     }
 
     @GetMapping("/api/reports/vehicles")
-    ApiResponse<Map<String, Object>> vehicles() {
-        return ApiResponse.ok(
-                "Vehicle report retrieved successfully",
-                Map.of("totalVehicles", 0, "vehiclesByBrand", List.of(), "mostCommonVehicleBrands", List.of()));
+    ApiResponse<ReportDtos.VehicleReport> vehicles(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Vehicle report retrieved successfully", reportService.vehicles(range(params)));
     }
 
     @GetMapping("/api/admin/reports/export/bookings.csv")
@@ -122,5 +90,39 @@ public class ReportController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=bookings.csv")
                 .contentType(MediaType.parseMediaType("text/csv"))
                 .body(reportService.bookingsCsv());
+    }
+
+    private ReportDtos.ReportRange range(Map<String, String> params) {
+        LocalDate startDate = parseDate(params.get("startDate"));
+        LocalDate endDate = parseDate(params.get("endDate"));
+        YearMonth startMonth = parseMonth(params.get("startMonth"));
+        YearMonth endMonth = parseMonth(params.get("endMonth"));
+
+        LocalDateTime start = startDate != null
+                ? startDate.atStartOfDay()
+                : (startMonth != null
+                        ? startMonth.atDay(1).atStartOfDay()
+                        : LocalDate.now().minusMonths(11).withDayOfMonth(1).atStartOfDay());
+        LocalDateTime endExclusive = endDate != null
+                ? endDate.plusDays(1).atStartOfDay()
+                : (endMonth != null
+                        ? endMonth.plusMonths(1).atDay(1).atStartOfDay()
+                        : LocalDate.now().plusDays(1).atStartOfDay());
+        return new ReportDtos.ReportRange(start, endExclusive);
+    }
+
+    private LocalDate parseDate(String value) {
+        return value == null || value.isBlank() ? null : LocalDate.parse(value);
+    }
+
+    private YearMonth parseMonth(String value) {
+        return value == null || value.isBlank() ? null : YearMonth.parse(value);
+    }
+
+    private int parseLimit(String value) {
+        if (value == null || value.isBlank()) {
+            return 5;
+        }
+        return Integer.parseInt(value);
     }
 }

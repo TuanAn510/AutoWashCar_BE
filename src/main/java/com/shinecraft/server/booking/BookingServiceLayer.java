@@ -1,5 +1,6 @@
 package com.shinecraft.server.booking;
 
+import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
@@ -61,6 +62,7 @@ public class BookingServiceLayer {
     private final PromotionService promotionService;
     private final AuthService authService;
     private final UserRepository userRepository;
+    private final AuditTrailService auditTrailService;
     private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
@@ -73,8 +75,9 @@ public class BookingServiceLayer {
             PromotionService promotionService,
             AuthService authService,
             UserRepository userRepository,
-            @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit,
-            @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime) {
+            AuditTrailService auditTrailService,
+            @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
+            @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
         this.vehicleRepository = vehicleRepository;
         this.serviceRepository = serviceRepository;
@@ -83,6 +86,7 @@ public class BookingServiceLayer {
         this.promotionService = promotionService;
         this.authService = authService;
         this.userRepository = userRepository;
+        this.auditTrailService = auditTrailService;
         this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
     }
@@ -118,12 +122,14 @@ public class BookingServiceLayer {
         }
 
         RewardRedemption redemption = null;
+        String redemptionBeforeValue = null;
         CarWashService freeAddOnService = null;
         if (request.rewardRedemptionId() != null) {
             redemption = redemptionRepository
                     .findByIdAndCustomerAndStatus(
                             request.rewardRedemptionId(), customer, RewardRedemptionStatus.AVAILABLE)
                     .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
+            redemptionBeforeValue = rewardRedemptionAuditValue(redemption);
             if (redemption.getExpiresAt() != null && !redemption.getExpiresAt().isAfter(LocalDateTime.now())) {
                 loyaltyService.markRedemptionExpired(redemption.getId());
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption has expired");
@@ -199,6 +205,15 @@ public class BookingServiceLayer {
         }
 
         Booking savedBooking = bookingRepository.save(booking);
+        auditTrailService.record(customer, customer, "BOOKING_CREATED", null, bookingAuditValue(savedBooking));
+        if (redemption != null) {
+            auditTrailService.record(
+                    customer,
+                    customer,
+                    "REWARD_REDEMPTION_USED",
+                    redemptionBeforeValue,
+                    rewardRedemptionAuditValue(redemption));
+        }
         if (promotion != null) {
             promotionService.recordPromotionUsed(promotion, savedBooking.getCustomer(), savedBooking.getId());
         }
@@ -363,6 +378,7 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+        requireCanViewBooking(authService.currentUser(), booking);
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
@@ -426,6 +442,9 @@ public class BookingServiceLayer {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
+        User actor = authService.currentUser();
+        requireCanUpdateStatus(actor, booking, status);
+        String beforeValue = bookingAuditValue(booking);
         BookingStatus currentStatus = booking.getStatus();
         validateStatusTransition(currentStatus, status);
         if (enforceScheduleTime
@@ -466,6 +485,12 @@ public class BookingServiceLayer {
                         booking);
             }
         }
+        auditTrailService.record(
+                actor,
+                booking.getCustomer(),
+                "BOOKING_STATUS_CHANGED",
+                beforeValue,
+                bookingAuditValue(booking));
         return BookingDtos.BookingResponse.from(booking);
     }
 
@@ -478,6 +503,9 @@ public class BookingServiceLayer {
     @Transactional
     public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request) {
         Booking booking = findBooking(bookingId);
+        User actor = authService.currentUser();
+        requireCanCreatePayment(actor, booking);
+        String beforeValue = bookingAuditValue(booking);
         if (booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
         }
@@ -488,6 +516,12 @@ public class BookingServiceLayer {
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
         String paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
         String paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+        auditTrailService.record(
+                actor,
+                booking.getCustomer(),
+                "PAYMENT_CREATED",
+                beforeValue,
+                bookingAuditValue(booking));
         return new BookingDtos.PaymentResponse(
                 paymentUrl,
                 paymentId,
@@ -500,6 +534,9 @@ public class BookingServiceLayer {
     public BookingDtos.AppointmentResponse updatePaymentStatus(
             Long bookingId, BookingDtos.UpdatePaymentStatusRequest request) {
         Booking booking = findBooking(bookingId);
+        User actor = authService.currentUser();
+        requireCanUpdatePayment(actor, booking);
+        String beforeValue = bookingAuditValue(booking);
         BookingPaymentStatus status = request == null
                 ? BookingPaymentStatus.PAID
                 : request.resolvedPaymentStatus();
@@ -509,23 +546,41 @@ public class BookingServiceLayer {
         booking.setPaymentMethod(method);
         booking.setPaymentStatus(status);
         booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        auditTrailService.record(
+                actor,
+                booking.getCustomer(),
+                "PAYMENT_STATUS_CHANGED",
+                beforeValue,
+                bookingAuditValue(booking));
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
     @Transactional
     public BookingDtos.AppointmentResponse assignStaff(Long bookingId, BookingDtos.AssignStaffRequest request) {
         Booking booking = findBooking(bookingId);
+        User actor = authService.currentUser();
+        requireAdmin(actor);
+        String beforeValue = bookingAuditValue(booking);
         User staff = userRepository
                 .findById(request.staffId())
                 .filter(user -> user.isActive() && user.getRole() == UserRole.ROLE_STAFF)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Assigned staff is not available"));
         booking.setAssignedStaff(staff);
+        auditTrailService.record(
+                actor,
+                booking.getCustomer(),
+                "STAFF_ASSIGNED",
+                beforeValue,
+                bookingAuditValue(booking));
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
     public BookingDtos.AppointmentResponse reschedule(Long bookingId, BookingDtos.RescheduleRequest request) {
         Booking booking = findBooking(bookingId);
+        User actor = authService.currentUser();
+        requireAdmin(actor);
+        String beforeValue = bookingAuditValue(booking);
         if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
         }
@@ -533,6 +588,12 @@ public class BookingServiceLayer {
         validateBookingEndTime(request.scheduledAt(), requiredSlots);
         validateNoOverlappingBooking(request.scheduledAt(), requiredSlots, booking.getId());
         booking.setScheduledAt(request.scheduledAt());
+        auditTrailService.record(
+                actor,
+                booking.getCustomer(),
+                "BOOKING_RESCHEDULED",
+                beforeValue,
+                bookingAuditValue(booking));
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
@@ -542,6 +603,66 @@ public class BookingServiceLayer {
                     HttpStatus.BAD_REQUEST,
                     "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
         }
+    }
+
+    private void requireAdmin(User actor) {
+        if (actor.getRole() != UserRole.ROLE_ADMIN) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Admin permission is required");
+        }
+    }
+
+    private void requireCanViewBooking(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN
+                || sameUser(actor, booking.getCustomer())
+                || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to access this appointment");
+    }
+
+    private void requireCanUpdateStatus(User actor, Booking booking, BookingStatus requestedStatus) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN) {
+            return;
+        }
+        if (actor.getRole() == UserRole.ROLE_STAFF && sameUser(actor, booking.getAssignedStaff())) {
+            if (requestedStatus == BookingStatus.CONFIRMED
+                    || requestedStatus == BookingStatus.IN_PROGRESS
+                    || requestedStatus == BookingStatus.COMPLETED) {
+                return;
+            }
+        }
+        if (actor.getRole() == UserRole.ROLE_CUSTOMER
+                && sameUser(actor, booking.getCustomer())
+                && requestedStatus == BookingStatus.CANCELLED) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment status");
+    }
+
+    private void requireCanCreatePayment(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN
+                || sameUser(actor, booking.getCustomer())
+                || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to create payment for this appointment");
+    }
+
+    private void requireCanUpdatePayment(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment payment");
+    }
+
+    private boolean sameUser(User first, User second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        if (first.getId() != null && second.getId() != null) {
+            return first.getId().equals(second.getId());
+        }
+        return first == second;
     }
 
     private void restoreCancellationResources(Booking booking) {
@@ -672,6 +793,27 @@ public class BookingServiceLayer {
         return bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+    }
+
+    private String bookingAuditValue(Booking booking) {
+        return auditTrailService.bookingValue(
+                booking.getId(),
+                booking.getStatus().name(),
+                booking.getPaymentStatus().name(),
+                booking.getPaymentMethod().name(),
+                booking.getAssignedStaff() == null ? null : booking.getAssignedStaff().getId(),
+                booking.getScheduledAt() == null ? null : booking.getScheduledAt().toString(),
+                booking.getCheckInAt() == null ? null : booking.getCheckInAt().toString(),
+                booking.getCompletedAt() == null ? null : booking.getCompletedAt().toString());
+    }
+
+    private String rewardRedemptionAuditValue(RewardRedemption redemption) {
+        return auditTrailService.rewardRedemptionValue(
+                redemption.getId(),
+                redemption.getReward().getId(),
+                redemption.getCustomer().getId(),
+                redemption.getStatus().name(),
+                redemption.getUsedAt() == null ? null : redemption.getUsedAt().toString());
     }
 
     private boolean overlaps(LocalDateTime startAt, LocalDateTime endAt, LocalDateTime existingStartAt, LocalDateTime existingEndAt) {

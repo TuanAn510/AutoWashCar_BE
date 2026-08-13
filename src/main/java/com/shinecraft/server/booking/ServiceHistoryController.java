@@ -37,6 +37,7 @@ public class ServiceHistoryController {
             @RequestParam(required = false) Long customerId,
             @RequestParam(required = false) Long vehicleId,
             @RequestParam(required = false) Long appointmentId) {
+        requireAdmin(authService.currentUser());
         return ApiListResponse.ok(
                 "Service histories retrieved successfully",
                 bookingRepository.findAll().stream()
@@ -89,6 +90,7 @@ public class ServiceHistoryController {
     @PatchMapping("/api/service-histories/{id}")
     @Transactional
     ApiResponse<ServiceHistoryResponse> update(@PathVariable Long id, @RequestBody UpdateServiceHistoryRequest request) {
+        requireAdmin(authService.currentUser());
         Booking booking = findBooking(id);
         if (request.note() != null) {
             booking.setNote(request.note());
@@ -98,14 +100,42 @@ public class ServiceHistoryController {
 
     @DeleteMapping("/api/service-histories/{id}")
     ApiResponse<Void> delete(@PathVariable Long id) {
+        requireAdmin(authService.currentUser());
         findBooking(id);
         throw new ApiException(HttpStatus.BAD_REQUEST, "Service histories are generated from bookings and cannot be deleted");
     }
 
     private Booking findBooking(Long id) {
-        return bookingRepository
+        Booking booking = bookingRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service history not found"));
+        requireCanViewBooking(authService.currentUser(), booking);
+        return booking;
+    }
+
+    private void requireAdmin(User actor) {
+        if (actor.getRole() != UserRole.ROLE_ADMIN) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Admin permission is required");
+        }
+    }
+
+    private void requireCanViewBooking(User actor, Booking booking) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN
+                || sameUser(actor, booking.getCustomer())
+                || sameUser(actor, booking.getAssignedStaff())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to access this service history");
+    }
+
+    private boolean sameUser(User first, User second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        if (first.getId() != null && second.getId() != null) {
+            return first.getId().equals(second.getId());
+        }
+        return first == second;
     }
 
     public record UpdateServiceHistoryRequest(String note, String nextMaintenanceDate) {}
