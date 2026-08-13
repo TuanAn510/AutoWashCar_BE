@@ -80,6 +80,9 @@ public class Booking extends BaseEntity {
 
     private LocalDateTime paidAt;
 
+    @Column(length = 100)
+    private String paymentGatewayRef;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")
     private Promotion promotion;

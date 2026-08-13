@@ -11,6 +11,7 @@ import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
 import com.shinecraft.server.loyalty.RewardType;
+import com.shinecraft.server.payment.VnPayService;
 import com.shinecraft.server.promotion.DiscountType;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
@@ -62,6 +63,7 @@ public class BookingServiceLayer {
     private final AuthService authService;
     private final UserRepository userRepository;
     private final AuditTrailService auditTrailService;
+    private final VnPayService vnPayService;
     private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
@@ -75,6 +77,7 @@ public class BookingServiceLayer {
             AuthService authService,
             UserRepository userRepository,
             AuditTrailService auditTrailService,
+            VnPayService vnPayService,
             @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
@@ -86,6 +89,7 @@ public class BookingServiceLayer {
         this.authService = authService;
         this.userRepository = userRepository;
         this.auditTrailService = auditTrailService;
+        this.vnPayService = vnPayService;
         this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
     }
@@ -490,7 +494,7 @@ public class BookingServiceLayer {
     }
 
     @Transactional
-    public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request) {
+    public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request, String clientIp) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
         requireCanCreatePayment(actor, booking);
@@ -503,8 +507,21 @@ public class BookingServiceLayer {
         booking.setPaymentStatus(BookingPaymentStatus.PENDING);
         booking.setPaidAt(null);
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
-        String paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
-        String paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+
+        String paymentUrl;
+        String paymentId;
+        String qrCodeUrl = null;
+
+        if (method == BookingPaymentMethod.VNPAY) {
+            paymentUrl = vnPayService.createPaymentUrl(booking, clientIp);
+            paymentId = extractTxnRefFromUrl(paymentUrl);
+            booking.setPaymentGatewayRef(paymentId);
+        } else {
+            // CASH
+            paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
+            paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+        }
+
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -516,7 +533,29 @@ public class BookingServiceLayer {
                 paymentId,
                 method.name().toLowerCase(java.util.Locale.ROOT),
                 booking.getFinalAmount(),
-                expiresAt);
+                expiresAt,
+                qrCodeUrl);
+    }
+
+    @Transactional
+    public void confirmPaymentInternal(
+            Long bookingId, BookingPaymentStatus status, BookingPaymentMethod method, String gatewayRef) {
+        Booking booking = findBooking(bookingId);
+        // Only update if not already PAID (prevent duplicate IPN + return)
+        if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            return;
+        }
+        String beforeValue = bookingAuditValue(booking);
+        booking.setPaymentMethod(method);
+        booking.setPaymentStatus(status);
+        booking.setPaymentGatewayRef(gatewayRef);
+        booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        auditTrailService.record(
+                null,
+                booking.getCustomer(),
+                "PAYMENT_CALLBACK_RECEIVED",
+                beforeValue,
+                bookingAuditValue(booking));
     }
 
     @Transactional
@@ -900,5 +939,14 @@ public class BookingServiceLayer {
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {
         return amount.multiply(percent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+    }
+
+    private String extractTxnRefFromUrl(String url) {
+        if (url == null || !url.contains("vnp_TxnRef=")) return null;
+        String[] parts = url.split("vnp_TxnRef=");
+        if (parts.length < 2) return null;
+        String txnRef = parts[1];
+        int ampIndex = txnRef.indexOf("&");
+        return ampIndex > 0 ? txnRef.substring(0, ampIndex) : txnRef;
     }
 }
