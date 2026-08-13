@@ -74,7 +74,8 @@ public final class BookingDtos {
             String paymentId,
             String method,
             BigDecimal amount,
-            LocalDateTime expiresAt) {}
+            LocalDateTime expiresAt,
+            String qrCodeUrl) {}
 
     public record UpdatePaymentStatusRequest(String paymentStatus, String paymentMethod) {
         public BookingPaymentStatus resolvedPaymentStatus() {

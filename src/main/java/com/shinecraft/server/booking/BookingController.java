@@ -4,6 +4,7 @@ import com.shinecraft.server.common.ApiResponse;
 import com.shinecraft.server.common.ApiSummaryListResponse;
 import com.shinecraft.server.common.PaginationMeta;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
@@ -137,8 +138,10 @@ public class BookingController {
 
     @PostMapping("/api/appointments/{id}/payment")
     ApiResponse<BookingDtos.PaymentResponse> createPayment(
-            @PathVariable Long id, @Valid @RequestBody BookingDtos.CreatePaymentRequest request) {
-        return ApiResponse.ok("Payment created successfully", bookingService.createPayment(id, request));
+            @PathVariable Long id, @Valid @RequestBody BookingDtos.CreatePaymentRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        String clientIp = getClientIp(httpRequest);
+        return ApiResponse.ok("Payment created successfully", bookingService.createPayment(id, request, clientIp));
     }
 
     @PatchMapping("/api/appointments/{id}/assign-staff")
@@ -189,5 +192,13 @@ public class BookingController {
                 appointments.stream().filter(appointment -> appointment.status().equals("in_progress")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("completed")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("cancelled")).count());
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
+            return xForwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }
