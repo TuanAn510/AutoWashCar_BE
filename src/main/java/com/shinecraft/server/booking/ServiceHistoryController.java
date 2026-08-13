@@ -64,7 +64,7 @@ public class ServiceHistoryController {
         User staff = authService.currentUser();
         List<Booking> bookings = staff.getRole() == UserRole.ROLE_ADMIN
                 ? bookingRepository.findAll()
-                : bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff);
+                : bookingRepository.findByAssignedStaffOrSecondaryAssignedStaffOrderByScheduledAtDesc(staff, staff);
         return ApiListResponse.ok(
                 "Staff service histories retrieved successfully",
                 bookings.stream().map(ServiceHistoryResponse::from).toList());
@@ -122,7 +122,8 @@ public class ServiceHistoryController {
     private void requireCanViewBooking(User actor, Booking booking) {
         if (actor.getRole() == UserRole.ROLE_ADMIN
                 || sameUser(actor, booking.getCustomer())
-                || sameUser(actor, booking.getAssignedStaff())) {
+                || sameUser(actor, booking.getAssignedStaff())
+                || sameUser(actor, booking.getSecondaryAssignedStaff())) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to access this service history");

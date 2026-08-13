@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -72,10 +73,15 @@ public class FrontendUserController {
         LocalDateTime weekStartAt = weekStart.atStartOfDay();
         LocalDateTime nextWeekStartAt = weekStart.plusWeeks(1).atStartOfDay();
 
-        Map<Long, List<Booking>> bookingsByStaff = bookingRepository.findByAssignedStaffIsNotNull().stream()
-                .collect(Collectors.groupingBy(booking -> booking.getAssignedStaff().getId()));
+        Map<Long, List<Booking>> bookingsByStaff = bookingRepository
+                .findByAssignedStaffIsNotNullOrSecondaryAssignedStaffIsNotNull()
+                .stream()
+                .flatMap(booking -> Stream.of(booking.getAssignedStaff(), booking.getSecondaryAssignedStaff())
+                        .filter(staff -> staff != null)
+                        .map(staff -> Map.entry(staff.getId(), booking)))
+                .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toList())));
 
-        List<StaffWorkloadResponse> workloads = userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF).stream()
+        List<StaffWorkloadResponse> workloads = userRepository.findByRoleOrderByIdAsc(UserRole.ROLE_STAFF).stream()
                 .map(staff -> StaffWorkloadResponse.from(
                         staff,
                         bookingsByStaff.getOrDefault(staff.getId(), List.of()),

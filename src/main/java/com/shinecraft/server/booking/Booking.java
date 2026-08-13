@@ -48,6 +48,10 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "assigned_staff_id")
     private User assignedStaff;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "secondary_assigned_staff_id")
+    private User secondaryAssignedStaff;
+
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
 

@@ -79,17 +79,34 @@ class BookingServiceLayerTest {
         account = new LoyaltyAccount();
         when(authService.currentUser()).thenReturn(customer);
         when(loyaltyService.getOrCreateAccount(customer)).thenReturn(account);
+        when(userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF))
+                .thenReturn(List.of(new User(), new User()));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
     }
 
     @Test
-    void availabilityMarksPendingSlotAsBooked() {
+    void availabilityKeepsSlotAvailableWhenCapacityRemains() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30)));
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(8, 0), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(8, 0), true, null);
+    }
+
+    @Test
+    void availabilityMarksSlotUnavailableWhenParallelCapacityIsFull() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30),
+                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.CONFIRMED, 30)));
+
+        BookingDtos.AvailabilityResponse response = bookingService.availability(date);
+
+        assertSlot(response, date, LocalTime.of(8, 0), false, "CAPACITY_FULL");
     }
 
     @Test
@@ -115,16 +132,16 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void availabilityBlocksEverySlotCoveredByANinetyMinuteBooking() {
+    void availabilityAllowsSlotsCoveredByANinetyMinuteBookingWhenCapacityRemains() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 90)));
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(9, 0), false, "BOOKED");
-        assertSlot(response, date, LocalTime.of(9, 30), false, "BOOKED");
-        assertSlot(response, date, LocalTime.of(10, 0), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(9, 0), true, null);
+        assertSlot(response, date, LocalTime.of(9, 30), true, null);
+        assertSlot(response, date, LocalTime.of(10, 0), true, null);
         assertSlot(response, date, LocalTime.of(10, 30), true, null);
     }
 
@@ -136,8 +153,8 @@ class BookingServiceLayerTest {
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(9, 0), false, "BOOKED");
-        assertSlot(response, date, LocalTime.of(9, 30), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(9, 0), true, null);
+        assertSlot(response, date, LocalTime.of(9, 30), true, null);
         assertSlot(response, date, LocalTime.of(10, 0), true, null);
     }
 
@@ -173,30 +190,58 @@ class BookingServiceLayerTest {
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertSlot(response, date, LocalTime.of(9, 30), false, "BOOKED");
+        assertSlot(response, date, LocalTime.of(9, 30), true, null);
         assertSlot(response, date, LocalTime.of(10, 0), true, null);
     }
 
     @Test
-    void createRejectsAUsedSlotWithAnOccupiedStatus() {
+    void createAllowsSameTimeForDifferentVehiclesWhenCapacityRemains() {
         LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 0);
         Vehicle vehicle = new Vehicle();
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
-        when(bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, List.of(
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(bookingAt(scheduledAt.toLocalDate(), LocalTime.of(9, 0), BookingStatus.PENDING, 30)));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
+    }
+
+    @Test
+    void createRejectsWhenParallelCapacityIsFull() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        LocalDateTime scheduledAt = date.atTime(9, 0);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 30),
+                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 30)));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking capacity is full for this time range");
+    }
+
+    @Test
+    void createRejectsWhenVehicleAlreadyHasTwoActiveAppointments() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
                         BookingStatus.PENDING,
                         BookingStatus.CONFIRMED,
                         BookingStatus.IN_QUEUE,
                         BookingStatus.IN_PROGRESS)))
-                .thenReturn(true);
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 30),
+                        bookingAt(date, LocalTime.of(11, 0), BookingStatus.CONFIRMED, 30)));
 
-        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(13, 0))))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This booking slot is already reserved");
-        verify(bookingRepository).existsByScheduledAtAndStatusIn(scheduledAt, List.of(
-                BookingStatus.PENDING,
-                BookingStatus.CONFIRMED,
-                BookingStatus.IN_QUEUE,
-                BookingStatus.IN_PROGRESS));
+                .hasMessage("A vehicle can only have up to 2 active appointments");
     }
 
     @Test
@@ -305,41 +350,57 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createRejectsAnOverlapWithAnExistingBookingDuration() {
+    void createRejectsSameVehicleOverlapWithAnExistingBookingDuration() {
         LocalDate date = LocalDate.now().plusDays(1);
         LocalDateTime scheduledAt = date.atTime(9, 30);
-        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
         when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 90)));
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This booking slot overlaps an existing booking");
+                .hasMessage("This vehicle already has an appointment in that time range");
     }
 
     @Test
-    void createRejectsAnArbitraryMinuteOverlapWithAnExistingBooking() {
+    void createRejectsSameVehicleArbitraryMinuteOverlapWithAnExistingBooking() {
         LocalDate date = LocalDate.now().plusDays(1);
         LocalDateTime scheduledAt = date.atTime(9, 1);
-        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
         when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 17), BookingStatus.PENDING, 30)));
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This booking slot overlaps an existing booking");
+                .hasMessage("This vehicle already has an appointment in that time range");
     }
 
     @Test
-    void createAllowsStartExactlyWhenAnExistingBookingEnds() {
+    void createAllowsSameVehicleStartExactlyWhenAnExistingBookingEnds() {
         LocalDate date = LocalDate.now().plusDays(1);
         LocalDateTime scheduledAt = date.atTime(9, 47);
-        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
         when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 17), BookingStatus.PENDING, 30)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
         when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
@@ -372,17 +433,23 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createUsesExactDurationForOverlapAndAllowsBoundaryTouch() {
+    void createUsesExactDurationForSameVehicleOverlapAndAllowsBoundaryTouch() {
         LocalDate date = LocalDate.now().plusDays(1);
-        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
         when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
         when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(9, 44))))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This booking slot overlaps an existing booking");
+                .hasMessage("This vehicle already has an appointment in that time range");
         assertThat(bookingService.create(requestAt(date.atTime(9, 45)))).isNotNull();
     }
 
@@ -732,6 +799,7 @@ class BookingServiceLayerTest {
         LocalDate date = LocalDate.now().plusDays(1);
         Booking booking = reschedulableBooking(date.atTime(9, 0), 45);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
 
         bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(16, 15)));
@@ -748,13 +816,20 @@ class BookingServiceLayerTest {
         Booking booking = reschedulableBooking(date.atTime(8, 0), 30);
         Booking existing = bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 45);
         existing.setId(100L);
+        existing.setVehicle(booking.getVehicle());
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(booking.getVehicle(), List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
+                .thenReturn(List.of(booking, existing));
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(booking, existing));
 
         assertThatThrownBy(() -> bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(9, 44))))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This booking slot overlaps an existing booking");
+                .hasMessage("This vehicle already has an appointment in that time range");
 
         bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(9, 45)));
         assertThat(booking.getScheduledAt()).isEqualTo(date.atTime(9, 45));
@@ -765,6 +840,7 @@ class BookingServiceLayerTest {
         LocalDateTime newSlot = LocalDate.now().plusDays(1).atTime(10, 0);
         Booking booking = reschedulableBooking(newSlot, 30);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
 
         bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));

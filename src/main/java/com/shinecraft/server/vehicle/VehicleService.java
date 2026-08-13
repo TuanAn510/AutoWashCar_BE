@@ -33,6 +33,7 @@ public class VehicleService {
         this.authService = authService;
     }
 
+    @Transactional(readOnly = true)
     public List<VehicleDtos.VehicleResponse> myVehicles() {
         User customer = authService.currentUser();
         return vehicleRepository.findByCustomerAndIsActiveTrue(customer).stream()

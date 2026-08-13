@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shinecraft.server.vehicle.Vehicle;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -66,4 +67,31 @@ public final class UserAdminDtos {
     public record UpdateUserRoleRequest(@NotNull UserRole role) {}
 
     public record ResetPasswordRequest(@NotBlank @Size(min = 8, max = 100) String newPassword) {}
+
+    public record CreateStaffRequest(
+            @NotBlank @Size(max = 120) String fullName,
+            @NotBlank @Pattern(regexp = "^[+0-9\\s.-]{9,20}$") String phone,
+            @NotBlank @Size(min = 8, max = 100) String password) {}
+
+    public record UpdateStaffRequest(
+            @Size(max = 120) String fullName,
+            @Size(max = 120) String displayName,
+            @Pattern(regexp = "^[+0-9\\s.-]{9,20}$") String phone,
+            @Size(min = 8, max = 100) String password,
+            Boolean active,
+            Boolean isActive) {
+        String resolvedFullName() {
+            if (fullName != null && !fullName.isBlank()) {
+                return fullName.trim();
+            }
+            if (displayName != null && !displayName.isBlank()) {
+                return displayName.trim();
+            }
+            return null;
+        }
+
+        Boolean resolvedActive() {
+            return active != null ? active : isActive;
+        }
+    }
 }

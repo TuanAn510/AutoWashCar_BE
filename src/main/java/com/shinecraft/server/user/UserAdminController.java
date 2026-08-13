@@ -4,6 +4,7 @@ import com.shinecraft.server.common.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,6 +35,35 @@ public class UserAdminController {
     @GetMapping("/{id}")
     ApiResponse<UserAdminDtos.UserSearchResponse> detail(@PathVariable Long id) {
         return ApiResponse.ok("User retrieved successfully", userAdminService.detail(id));
+    }
+
+    @GetMapping("/staffs")
+    ApiResponse<List<UserAdminDtos.UserSearchResponse>> staffs(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Boolean active) {
+        return ApiResponse.ok("Staffs retrieved successfully", userAdminService.listStaffs(keyword, active));
+    }
+
+    @PostMapping("/staffs")
+    ApiResponse<UserAdminDtos.UserSearchResponse> createStaff(
+            @Valid @RequestBody UserAdminDtos.CreateStaffRequest request) {
+        return ApiResponse.ok("Staff created successfully", userAdminService.createStaff(request));
+    }
+
+    @PatchMapping("/staffs/{id}")
+    ApiResponse<UserAdminDtos.UserSearchResponse> updateStaff(
+            @PathVariable Long id, @Valid @RequestBody UserAdminDtos.UpdateStaffRequest request) {
+        return ApiResponse.ok("Staff updated successfully", userAdminService.updateStaff(id, request));
+    }
+
+    @DeleteMapping("/staffs/{id}")
+    ApiResponse<UserAdminDtos.UserSearchResponse> lockStaff(@PathVariable Long id) {
+        return ApiResponse.ok("Staff locked successfully", userAdminService.updateStaffStatus(id, false));
+    }
+
+    @PatchMapping("/staffs/{id}/restore")
+    ApiResponse<UserAdminDtos.UserSearchResponse> unlockStaff(@PathVariable Long id) {
+        return ApiResponse.ok("Staff unlocked successfully", userAdminService.updateStaffStatus(id, true));
     }
 
     @PatchMapping("/{id}/status")

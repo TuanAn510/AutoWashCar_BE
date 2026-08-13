@@ -155,8 +155,13 @@ public class BookingController {
 
     @GetMapping("/api/bookings/availability")
     ApiResponse<BookingDtos.AvailabilityResponse> availability(
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-        return ApiResponse.ok("Booking availability retrieved successfully", bookingService.availability(date));
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) Long vehicleId,
+            @RequestParam(required = false) Long serviceId,
+            @RequestParam(required = false) Long rewardRedemptionId) {
+        return ApiResponse.ok(
+                "Booking availability retrieved successfully",
+                bookingService.availability(date, vehicleId, serviceId, rewardRedemptionId));
     }
 
     @GetMapping("/api/admin/bookings/today")

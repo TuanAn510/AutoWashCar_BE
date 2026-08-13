@@ -56,6 +56,77 @@ public class UserAdminService {
         return UserAdminDtos.UserSearchResponse.from(user, vehicleRepository.findByCustomerOrderByIsActiveDescIdAsc(user));
     }
 
+    @Transactional(readOnly = true)
+    public List<UserAdminDtos.UserSearchResponse> listStaffs(String keyword, Boolean active) {
+        return search(keyword, UserRole.ROLE_STAFF, active);
+    }
+
+    @Transactional
+    public UserAdminDtos.UserSearchResponse createStaff(UserAdminDtos.CreateStaffRequest request) {
+        String phone = PhoneNormalizer.normalize(request.phone());
+        if (phone.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Phone is required");
+        }
+        if (userRepository.existsByPhone(phone)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Phone already exists");
+        }
+
+        User staff = new User();
+        staff.setFullName(request.fullName().trim());
+        staff.setPhone(phone);
+        staff.setPasswordHash(passwordEncoder.encode(request.password()));
+        staff.setRole(UserRole.ROLE_STAFF);
+        staff.setActive(true);
+
+        User saved = userRepository.save(staff);
+        audit(saved, "STAFF_CREATED", null, saved.getPhone());
+        return UserAdminDtos.UserSearchResponse.from(saved, List.of());
+    }
+
+    @Transactional
+    public UserAdminDtos.UserSearchResponse updateStaff(Long id, UserAdminDtos.UpdateStaffRequest request) {
+        User staff = findStaff(id);
+
+        String nextFullName = request.resolvedFullName();
+        if (nextFullName != null) {
+            staff.setFullName(nextFullName);
+        }
+
+        if (request.phone() != null && !request.phone().isBlank()) {
+            String phone = PhoneNormalizer.normalize(request.phone());
+            if (phone.isBlank()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Phone is required");
+            }
+            if (userRepository.existsByPhoneAndIdNot(phone, staff.getId())) {
+                throw new ApiException(HttpStatus.CONFLICT, "Phone already exists");
+            }
+            staff.setPhone(phone);
+        }
+
+        if (request.password() != null && !request.password().isBlank()) {
+            staff.setPasswordHash(passwordEncoder.encode(request.password()));
+        }
+
+        Boolean active = request.resolvedActive();
+        if (active != null) {
+            staff.setActive(active);
+        }
+
+        User saved = userRepository.save(staff);
+        audit(saved, "STAFF_UPDATED", null, null);
+        return UserAdminDtos.UserSearchResponse.from(saved, List.of());
+    }
+
+    @Transactional
+    public UserAdminDtos.UserSearchResponse updateStaffStatus(Long id, boolean active) {
+        User staff = findStaff(id);
+        boolean before = staff.isActive();
+        staff.setActive(active);
+        User saved = userRepository.save(staff);
+        audit(saved, active ? "STAFF_UNLOCKED" : "STAFF_LOCKED", String.valueOf(before), String.valueOf(active));
+        return UserAdminDtos.UserSearchResponse.from(saved, List.of());
+    }
+
     @Transactional
     public UserAdminDtos.UserSearchResponse updateStatus(Long id, boolean active) {
         User user = findUser(id);
@@ -133,6 +204,14 @@ public class UserAdminService {
         return userRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "User not found"));
+    }
+
+    private User findStaff(Long id) {
+        User user = findUser(id);
+        if (user.getRole() != UserRole.ROLE_STAFF) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not a staff account");
+        }
+        return user;
     }
 
     private void audit(User target, String action, String before, String after) {

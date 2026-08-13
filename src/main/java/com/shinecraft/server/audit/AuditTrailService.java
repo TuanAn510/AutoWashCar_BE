@@ -27,11 +27,12 @@ public class AuditTrailService {
             String paymentStatus,
             String paymentMethod,
             Long assignedStaffId,
+            Long secondaryAssignedStaffId,
             String scheduledAt,
             String checkInAt,
             String completedAt) {
         return """
-                {"bookingId":%s,"status":"%s","paymentStatus":"%s","paymentMethod":"%s","assignedStaffId":%s,"scheduledAt":%s,"checkInAt":%s,"completedAt":%s}
+                {"bookingId":%s,"status":"%s","paymentStatus":"%s","paymentMethod":"%s","assignedStaffId":%s,"secondaryAssignedStaffId":%s,"scheduledAt":%s,"checkInAt":%s,"completedAt":%s}
                 """
                 .formatted(
                         numberOrNull(bookingId),
@@ -39,6 +40,7 @@ public class AuditTrailService {
                         escapeJson(paymentStatus),
                         escapeJson(paymentMethod),
                         numberOrNull(assignedStaffId),
+                        numberOrNull(secondaryAssignedStaffId),
                         stringOrNull(scheduledAt),
                         stringOrNull(checkInAt),
                         stringOrNull(completedAt))
