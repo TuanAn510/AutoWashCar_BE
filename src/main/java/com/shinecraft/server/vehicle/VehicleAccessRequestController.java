@@ -93,6 +93,14 @@ public class VehicleAccessRequestController {
         accessRequest.setStatus(status);
         accessRequest.setReviewNote(request == null ? null : request.reviewNote());
         accessRequest.setReviewedAt(LocalDateTime.now());
+
+        if (status == VehicleAccessRequestStatus.APPROVED && accessRequest.getVehicle() != null) {
+            Vehicle vehicle = accessRequest.getVehicle();
+            vehicle.setCustomer(accessRequest.getRequester());
+            vehicle.setOwnershipStartAt(LocalDateTime.now());
+            vehicleRepository.save(vehicle);
+        }
+
         return VehicleAccessRequestResponse.from(requestRepository.save(accessRequest));
     }
 

@@ -291,4 +291,26 @@ public final class BookingDtos {
     private static String normalizeEnum(String value) {
         return value.trim().replace('-', '_').toUpperCase(Locale.ROOT);
     }
+
+    public record AppointmentFilterParams(
+            String search,
+            String status,
+            String staffId,
+            String dateFrom,
+            String dateTo,
+            int page,
+            int limit,
+            String sortBy,
+            String sortOrder) {}
+
+    public record PaginationMeta(
+            int page,
+            int limit,
+            long total,
+            int totalPages) {}
+
+    public record AppointmentPageResponse(
+            List<AppointmentResponse> appointments,
+            PaginationMeta pagination,
+            AppointmentStatusSummary summary) {}
 }

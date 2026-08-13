@@ -24,7 +24,7 @@ public class ServiceCategory extends BaseEntity {
     @Column(nullable = false, unique = true, length = 120)
     private String name;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false)

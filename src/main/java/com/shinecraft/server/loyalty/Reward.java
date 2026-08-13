@@ -32,7 +32,7 @@ public class Reward extends BaseEntity {
     @Column(nullable = false, length = 160)
     private String name;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false)

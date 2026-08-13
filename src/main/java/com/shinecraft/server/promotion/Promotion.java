@@ -36,7 +36,7 @@ public class Promotion extends BaseEntity {
     @Column(nullable = false, length = 160)
     private String title;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Enumerated(EnumType.STRING)

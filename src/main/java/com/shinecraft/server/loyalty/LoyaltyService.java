@@ -18,6 +18,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -27,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class LoyaltyService {
+    private static final Logger log = LoggerFactory.getLogger(LoyaltyService.class);
     private final LoyaltyAccountRepository accountRepository;
     private final LoyaltyTransactionRepository transactionRepository;
     private final MembershipTierRepository tierRepository;
@@ -98,12 +101,12 @@ public class LoyaltyService {
         return LoyaltyDtos.TierResponse.from(tierRepository.save(tier));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public LoyaltyDtos.LoyaltyAccountResponse myAccount() {
         return accountResponse(getOrCreateAccount(authService.currentUser()));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<Map<String, Object>> customersWithLoyalty(String search) {
         String keyword = search == null ? "" : search.trim().toLowerCase();
         return userRepository.findAll().stream()
@@ -129,7 +132,7 @@ public class LoyaltyService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public LoyaltyDtos.LoyaltyAccountResponse customerAccount(Long customerId) {
         User customer = userRepository
                 .findById(customerId)
@@ -266,12 +269,31 @@ public class LoyaltyService {
 
     @Transactional
     public LoyaltyAccount getOrCreateAccount(User customer) {
-        return accountRepository.findByCustomer(customer).orElseGet(() -> {
-            LoyaltyAccount account = new LoyaltyAccount();
-            account.setCustomer(customer);
-            account.setMembershipTier(findTier(0));
-            return accountRepository.save(account);
+        LoyaltyAccount account = accountRepository.findByCustomer(customer).orElseGet(() -> {
+            LoyaltyAccount newAccount = new LoyaltyAccount();
+            newAccount.setCustomer(customer);
+            newAccount.setMembershipTier(findTier(0));
+            return accountRepository.saveAndFlush(newAccount);
         });
+
+        // Auto-upgrade tier on every access (handles points earned before upgrade logic existed)
+        MembershipTier currentTier = account.getMembershipTier();
+        MembershipTier expectedTier = findTier(account.getLifetimePoints());
+        log.info("Auto-upgrade check for customer {}: lifetimePoints={}, currentTier={}, expectedTier={}",
+                customer.getId(), account.getLifetimePoints(),
+                currentTier != null ? currentTier.getName() : "none",
+                expectedTier != null ? expectedTier.getName() : "none");
+        if (expectedTier != null && (currentTier == null
+                || expectedTier.getPriorityLevel() > currentTier.getPriorityLevel())) {
+            account.setMembershipTier(expectedTier);
+            accountRepository.updateMembershipTier(account.getId(), expectedTier);
+            log.info("Auto-upgraded customer {} from {} to {} on account access",
+                    customer.getId(),
+                    currentTier != null ? currentTier.getName() : "none",
+                    expectedTier.getName());
+        }
+
+        return account;
     }
 
     @Transactional
@@ -282,7 +304,23 @@ public class LoyaltyService {
         account.setLifetimePoints(account.getLifetimePoints() + points);
         account.setTotalSpending(account.getTotalSpending().add(amount));
         account.setVisitCount(account.getVisitCount() + 1);
-        accountRepository.save(account);
+
+        // Auto-upgrade membership tier based on lifetime points
+        MembershipTier newTier = findTier(account.getLifetimePoints());
+        MembershipTier currentTier = account.getMembershipTier();
+        log.info("Earned {} points for customer {}. Current points: {}, current tier: {}, new tier: {}",
+                points, customer.getId(), account.getCurrentPoints(),
+                currentTier != null ? currentTier.getName() : "none",
+                newTier != null ? newTier.getName() : "none");
+        if (newTier != null && (currentTier == null
+                || newTier.getPriorityLevel() > currentTier.getPriorityLevel())) {
+            account.setMembershipTier(newTier);
+            log.info("Upgraded customer {} from {} to {}",
+                    customer.getId(),
+                    currentTier != null ? currentTier.getName() : "none",
+                    newTier.getName());
+        }
+        accountRepository.saveAndFlush(account);
 
         LoyaltyTransaction transaction = new LoyaltyTransaction();
         transaction.setCustomer(customer);
@@ -366,11 +404,11 @@ public class LoyaltyService {
     }
 
     private LoyaltyAccount getOrCreateAccountForUpdate(User customer) {
-        return accountRepository.findByCustomerForUpdate(customer).orElseGet(() -> {
+        return accountRepository.findByCustomer(customer).orElseGet(() -> {
             LoyaltyAccount account = new LoyaltyAccount();
             account.setCustomer(customer);
             account.setMembershipTier(findTier(0));
-            return accountRepository.save(account);
+            return accountRepository.saveAndFlush(account);
         });
     }
 

@@ -42,14 +42,14 @@ public class VehicleAccessRequest extends BaseEntity {
     @Column(nullable = false, length = 80)
     private String relationship;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String note;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private VehicleAccessRequestStatus status = VehicleAccessRequestStatus.PENDING;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String reviewNote;
 
     private LocalDateTime reviewedAt;

@@ -88,7 +88,7 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "reward_redemption_id")
     private RewardRedemption rewardRedemption;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String note;
 
     private LocalDateTime completedAt;

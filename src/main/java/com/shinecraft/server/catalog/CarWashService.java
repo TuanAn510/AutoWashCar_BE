@@ -32,7 +32,7 @@ public class CarWashService extends BaseEntity {
     @Column(nullable = false, length = 120)
     private String name;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false, precision = 12, scale = 2)

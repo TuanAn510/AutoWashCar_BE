@@ -65,7 +65,8 @@ class BookingServiceLayerTest {
                 promotionService,
                 authService,
                 userRepository,
-                10000);
+                10000,
+                true);
 
         customer = new User();
         account = new LoyaltyAccount();

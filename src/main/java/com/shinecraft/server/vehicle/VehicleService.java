@@ -32,7 +32,7 @@ public class VehicleService {
         requireForCreate(request);
         String plate = LicensePlateNormalizer.normalize(request.licensePlate());
         if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate)) {
-            throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
+            throw new ApiException(HttpStatus.CONFLICT, "License plate already exists", "VEHICLE_VERIFICATION_REQUIRED");
         }
         Vehicle vehicle = new Vehicle();
         vehicle.setCustomer(authService.currentUser());

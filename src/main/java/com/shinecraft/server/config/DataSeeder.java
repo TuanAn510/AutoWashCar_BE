@@ -188,14 +188,9 @@ public class DataSeeder implements CommandLineRunner {
         wash.setDescription("Standard car wash services");
         categoryRepository.save(wash);
 
-        ServiceCategory detailing = new ServiceCategory();
-        detailing.setName("Car Care");
-        detailing.setDescription("Care and deep cleaning services");
-        categoryRepository.save(detailing);
-
         createService(wash, "Basic Wash", "Exterior cleaning", "150000", 30);
         createService(wash, "Premium Wash", "Exterior wash and interior vacuum", "350000", 45);
-        createService(detailing, "Interior Cleaning", "Deep interior cleaning", "850000", 90);
+        createService(wash, "Interior Cleaning", "Deep interior cleaning and professional detailing", "850000", 90);
     }
 
     private void createService(ServiceCategory category, String name, String description, String price, int duration) {
