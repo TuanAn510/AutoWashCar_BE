@@ -465,7 +465,7 @@ public class BookingServiceLayer {
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
-            int points = booking.getFinalAmount()
+            int points = booking.getSubtotalAmount()
                     .divide(BigDecimal.valueOf(pointsAmountUnit), 0, RoundingMode.DOWN)
                     .intValue();
 
