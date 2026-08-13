@@ -1,6 +1,7 @@
 package com.shinecraft.server.vehicle;
 
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.common.LicensePlateNormalizer;
 import com.shinecraft.server.common.PaginationMeta;
 import com.shinecraft.server.user.AuthService;
@@ -13,14 +14,22 @@ import java.util.Locale;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class VehicleService {
     private final VehicleRepository vehicleRepository;
+    private final VehicleImageRepository vehicleImageRepository;
+    private final FileStorageService fileStorageService;
     private final AuthService authService;
 
-    public VehicleService(VehicleRepository vehicleRepository, AuthService authService) {
+    public VehicleService(VehicleRepository vehicleRepository,
+                          VehicleImageRepository vehicleImageRepository,
+                          FileStorageService fileStorageService,
+                          AuthService authService) {
         this.vehicleRepository = vehicleRepository;
+        this.vehicleImageRepository = vehicleImageRepository;
+        this.fileStorageService = fileStorageService;
         this.authService = authService;
     }
 
@@ -74,6 +83,11 @@ public class VehicleService {
 
     @Transactional
     public VehicleDtos.VehicleResponse create(VehicleDtos.VehicleRequest request) {
+        return create(request, null);
+    }
+
+    @Transactional
+    public VehicleDtos.VehicleResponse create(VehicleDtos.VehicleRequest request, List<MultipartFile> files) {
         requireForCreate(request);
         String plate = LicensePlateNormalizer.normalize(request.licensePlate());
         if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate)) {
@@ -88,11 +102,20 @@ public class VehicleService {
         vehicle.setManufactureYear(request.resolvedYear());
         vehicle.setCarType(normalizeCarType(request.resolvedCarType()));
         vehicle.setOwnershipStartAt(LocalDateTime.now());
-        return VehicleDtos.VehicleResponse.from(vehicleRepository.save(vehicle));
+        vehicle = vehicleRepository.save(vehicle);
+
+        saveImages(vehicle, files);
+
+        return VehicleDtos.VehicleResponse.from(vehicle);
     }
 
     @Transactional
     public VehicleDtos.VehicleResponse update(Long id, VehicleDtos.VehicleRequest request) {
+        return update(id, request, null);
+    }
+
+    @Transactional
+    public VehicleDtos.VehicleResponse update(Long id, VehicleDtos.VehicleRequest request, List<MultipartFile> files) {
         Vehicle vehicle = vehicleRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Vehicle not found"));
@@ -123,6 +146,9 @@ public class VehicleService {
         if (request.carType() != null && !request.carType().isBlank()) {
             vehicle.setCarType(normalizeCarType(request.carType()));
         }
+
+        saveImages(vehicle, files);
+
         return VehicleDtos.VehicleResponse.from(vehicleRepository.save(vehicle));
     }
 
@@ -221,5 +247,29 @@ public class VehicleService {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private void saveImages(Vehicle vehicle, List<MultipartFile> files) {
+        if (files == null || files.isEmpty()) return;
+
+        // Delete existing images
+        List<VehicleImage> existingImages = vehicleImageRepository.findByVehicleIdOrderBySortOrderAsc(vehicle.getId());
+        for (VehicleImage img : existingImages) {
+            fileStorageService.delete(img.getUrl());
+        }
+        vehicleImageRepository.deleteByVehicleId(vehicle.getId());
+
+        // Save new images
+        int sortOrder = 0;
+        for (MultipartFile file : files) {
+            if (file.isEmpty()) continue;
+            String url = fileStorageService.store(file);
+            VehicleImage image = new VehicleImage();
+            image.setVehicle(vehicle);
+            image.setUrl(url);
+            image.setOriginalName(file.getOriginalFilename());
+            image.setSortOrder(sortOrder++);
+            vehicleImageRepository.save(image);
+        }
     }
 }

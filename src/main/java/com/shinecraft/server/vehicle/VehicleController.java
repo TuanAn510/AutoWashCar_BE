@@ -62,7 +62,8 @@ public class VehicleController {
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ApiResponse<VehicleDtos.VehicleResponse> createForm(@ModelAttribute VehicleDtos.VehicleFormRequest request) {
-        return ApiResponse.ok("Vehicle created successfully", vehicleService.create(request.toRequest()));
+        return ApiResponse.ok("Vehicle created successfully",
+                vehicleService.create(request.toRequest(), request.getFiles()));
     }
 
     @PatchMapping(path = "/{id}", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -74,7 +75,8 @@ public class VehicleController {
     @PatchMapping(path = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ApiResponse<VehicleDtos.VehicleResponse> updateForm(
             @PathVariable Long id, @ModelAttribute VehicleDtos.VehicleFormRequest request) {
-        return ApiResponse.ok("Vehicle updated successfully", vehicleService.update(id, request.toRequest()));
+        return ApiResponse.ok("Vehicle updated successfully",
+                vehicleService.update(id, request.toRequest(), request.getFiles()));
     }
 
     @DeleteMapping("/{id}")
