@@ -16,9 +16,32 @@ public final class VehicleDtos {
             @Size(max = 40) String color,
             Integer manufactureYear,
             Integer year,
-            String carType) {
+            String carType,
+            String brandId,
+            String modelId,
+            @Size(max = 80) String suggestedBrandName,
+            @Size(max = 80) String suggestedModelName) {
         public Integer resolvedYear() {
             return year != null ? year : manufactureYear;
+        }
+
+        public Long resolvedBrandId() {
+            return parseId(brandId);
+        }
+
+        public Long resolvedModelId() {
+            return parseId(modelId);
+        }
+
+        private static Long parseId(String value) {
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            try {
+                return Long.valueOf(value.trim());
+            } catch (NumberFormatException exception) {
+                return null;
+            }
         }
     }
 
@@ -30,6 +53,10 @@ public final class VehicleDtos {
         private Integer manufactureYear;
         private Integer year;
         private String carType;
+        private String brandId;
+        private String modelId;
+        private String suggestedBrandName;
+        private String suggestedModelName;
 
         public String getLicensePlate() {
             return licensePlate;
@@ -87,8 +114,42 @@ public final class VehicleDtos {
             this.carType = carType;
         }
 
+        public String getBrandId() {
+            return brandId;
+        }
+
+        public void setBrandId(String brandId) {
+            this.brandId = brandId;
+        }
+
+        public String getModelId() {
+            return modelId;
+        }
+
+        public void setModelId(String modelId) {
+            this.modelId = modelId;
+        }
+
+        public String getSuggestedBrandName() {
+            return suggestedBrandName;
+        }
+
+        public void setSuggestedBrandName(String suggestedBrandName) {
+            this.suggestedBrandName = suggestedBrandName;
+        }
+
+        public String getSuggestedModelName() {
+            return suggestedModelName;
+        }
+
+        public void setSuggestedModelName(String suggestedModelName) {
+            this.suggestedModelName = suggestedModelName;
+        }
+
         public VehicleRequest toRequest() {
-            return new VehicleRequest(licensePlate, brand, model, color, manufactureYear, year, carType);
+            return new VehicleRequest(
+                    licensePlate, brand, model, color, manufactureYear, year, carType,
+                    brandId, modelId, suggestedBrandName, suggestedModelName);
         }
     }
 
@@ -106,7 +167,10 @@ public final class VehicleDtos {
             List<Object> images,
             LocalDateTime deletedAt,
             LocalDateTime createdAt,
-            LocalDateTime updatedAt) {
+            LocalDateTime updatedAt,
+            String verificationStatus,
+            Long brandId,
+            Long modelId) {
         public static VehicleResponse from(Vehicle vehicle) {
             return new VehicleResponse(
                     vehicle.getId(),
@@ -122,7 +186,12 @@ public final class VehicleDtos {
                     List.of(),
                     vehicle.isActive() ? null : vehicle.getOwnershipEndAt(),
                     vehicle.getCreatedAt(),
-                    vehicle.getUpdatedAt());
+                    vehicle.getUpdatedAt(),
+                    vehicle.getVerificationStatus() == null
+                            ? "pending"
+                            : vehicle.getVerificationStatus().name().toLowerCase(),
+                    vehicle.getBrandRef() == null ? null : vehicle.getBrandRef().getId(),
+                    vehicle.getModelRef() == null ? null : vehicle.getModelRef().getId());
         }
     }
 }
