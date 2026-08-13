@@ -20,6 +20,7 @@ import com.shinecraft.server.loyalty.Reward;
 import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
+import com.shinecraft.server.payment.VnPayService;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
 import com.shinecraft.server.user.AuthService;
@@ -71,6 +72,7 @@ class BookingServiceLayerTest {
                 authService,
                 userRepository,
                 mock(AuditTrailService.class),
+                mock(VnPayService.class),
                 true,
                 10000);
 
@@ -611,11 +613,11 @@ class BookingServiceLayerTest {
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
         BookingDtos.PaymentResponse response = bookingService.createPayment(
-                99L, new BookingDtos.CreatePaymentRequest("vnpay"));
+                99L, new BookingDtos.CreatePaymentRequest("cash"), "127.0.0.1");
 
-        assertThat(booking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.VNPAY);
+        assertThat(booking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.CASH);
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
-        assertThat(response.method()).isEqualTo("vnpay");
+        assertThat(response.method()).isEqualTo("cash");
         assertThat(response.paymentUrl()).contains("/appointments/99/payment/confirm");
         assertThat(response.amount()).isEqualByComparingTo("10000");
     }
