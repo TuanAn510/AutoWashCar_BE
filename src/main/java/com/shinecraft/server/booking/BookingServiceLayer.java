@@ -98,6 +98,7 @@ public class BookingServiceLayer {
                 .findByIdAndCustomer(request.vehicleId(), customer)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
+        validateMinimumLeadTime(request.scheduledAt());
         validateBookingWindow(request.scheduledAt(), account);
         validateBookableSlot(request.scheduledAt());
 
@@ -738,6 +739,13 @@ public class BookingServiceLayer {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "Current membership tier can only book up to " + windowDays + " days in advance");
+        }
+    }
+
+    private void validateMinimumLeadTime(LocalDateTime scheduledAt) {
+        if (scheduledAt.isBefore(LocalDateTime.now().plusMinutes(30))) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST, "Booking must be scheduled at least 30 minutes in advance");
         }
     }
 

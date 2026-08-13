@@ -289,6 +289,21 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void customerCannotCreateBookingLessThanThirtyMinutesInAdvance() throws Exception {
+        CustomerContext customer = registerCustomer();
+        LocalDateTime scheduledAt = LocalDateTime.now().plusMinutes(29).withSecond(0).withNano(0);
+
+        mockMvc.perform(post("/api/bookings")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bookingJson(customer, null, scheduledAt)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success", is(false)))
+                .andExpect(jsonPath(
+                        "$.message", is("Booking must be scheduled at least 30 minutes in advance")));
+    }
+
+    @Test
     void customerCanCreateAppointmentAtAnArbitraryMinute() throws Exception {
         CustomerContext customer = registerCustomer();
         LocalDateTime scheduledAt = nextSlot().withMinute(17);
