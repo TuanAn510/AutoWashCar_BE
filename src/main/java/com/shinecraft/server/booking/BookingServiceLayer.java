@@ -48,7 +48,7 @@ public class BookingServiceLayer {
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
             BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
-            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
             BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
             BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
             BookingStatus.COMPLETED, Set.of(),
@@ -443,7 +443,7 @@ public class BookingServiceLayer {
                     "Không thể bắt đầu hoặc hoàn thành lịch hẹn trước thời gian đã lên lịch");
         }
         if (currentStatus == BookingStatus.CONFIRMED
-                    && (status == BookingStatus.IN_QUEUE || status == BookingStatus.IN_PROGRESS)
+                    && status == BookingStatus.IN_QUEUE
                     && booking.getCheckInAt() == null) {
             booking.setCheckInAt(LocalDateTime.now());
         }
@@ -573,6 +573,8 @@ public class BookingServiceLayer {
         if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
         }
+        validateMinimumLeadTime(request.scheduledAt());
+        validateBookableStartTime(request.scheduledAt());
         int reservationDurationMinutes = totalDuration(booking);
         validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
         validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes, booking.getId());
@@ -615,6 +617,7 @@ public class BookingServiceLayer {
         }
         if (actor.getRole() == UserRole.ROLE_STAFF && sameUser(actor, booking.getAssignedStaff())) {
             if (requestedStatus == BookingStatus.CONFIRMED
+                    || requestedStatus == BookingStatus.IN_QUEUE
                     || requestedStatus == BookingStatus.IN_PROGRESS
                     || requestedStatus == BookingStatus.COMPLETED) {
                 return;
@@ -738,11 +741,15 @@ public class BookingServiceLayer {
     }
 
     private void validateBookableSlot(LocalDateTime scheduledAt) {
-        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
-        }
+        validateBookableStartTime(scheduledAt);
         if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
+        }
+    }
+
+    private void validateBookableStartTime(LocalDateTime scheduledAt) {
+        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
         }
     }
 

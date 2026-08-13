@@ -484,6 +484,17 @@ class BookingServiceLayerTest {
     }
 
     @Test
+    void statusRejectsConfirmedToInProgressWithoutCheckIn() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid booking status transition from CONFIRMED to IN_PROGRESS");
+        assertThat(booking.getCheckInAt()).isNull();
+    }
+
+    @Test
     void statusRejectsTransitionsOutOfTerminalStates() {
         assertInvalidTransition(BookingStatus.COMPLETED, BookingStatus.CONFIRMED);
         assertInvalidTransition(BookingStatus.CANCELLED, BookingStatus.CONFIRMED);
@@ -559,6 +570,41 @@ class BookingServiceLayerTest {
     }
 
     @Test
+    void appointmentResponseExposesInQueueStatus() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_QUEUE);
+
+        BookingDtos.AppointmentResponse response = BookingDtos.AppointmentResponse.from(booking);
+
+        assertThat(response.status()).isEqualTo("in_queue");
+    }
+
+    @Test
+    void assignedStaffCanAdvanceThroughQueueLifecycleButCannotCancel() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        User staff = new User();
+        staff.setId(7L);
+        staff.setRole(UserRole.ROLE_STAFF);
+        booking.setAssignedStaff(staff);
+        when(authService.currentUser()).thenReturn(staff);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.IN_QUEUE);
+        LocalDateTime checkInAt = booking.getCheckInAt();
+        bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS);
+        bookingService.updateStatus(99L, BookingStatus.COMPLETED);
+
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
+
+        Booking cancellable = bookingWithStatus(BookingStatus.CONFIRMED);
+        cancellable.setAssignedStaff(staff);
+        when(bookingRepository.findById(100L)).thenReturn(java.util.Optional.of(cancellable));
+        assertThatThrownBy(() -> bookingService.updateStatus(100L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("You do not have permission to update this appointment status");
+    }
+
+    @Test
     void createPaymentStoresPendingPaymentMethodAndReturnsPaymentDetails() {
         Booking booking = bookingWithStatus(BookingStatus.PENDING);
         booking.setId(99L);
@@ -624,6 +670,118 @@ class BookingServiceLayerTest {
 
         assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
         assertThat(response.scheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleAllowsArbitraryMinuteStartWhenFree() {
+        LocalDateTime newSlot = LocalDate.now().plusDays(1).atTime(9, 17);
+        Booking booking = reschedulableBooking(LocalDate.now().plusDays(1).atTime(8, 0), 45);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));
+
+        assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleRejectsStartBeforeOpeningTime() {
+        assertInvalidRescheduleStart(LocalDate.now().plusDays(1).atTime(7, 59));
+    }
+
+    @Test
+    void rescheduleAllowsOpeningTime() {
+        LocalDateTime newSlot = LocalDate.now().plusDays(1).atTime(8, 0);
+        Booking booking = reschedulableBooking(LocalDate.now().plusDays(1).atTime(9, 0), 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));
+
+        assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleRejectsStartAtClosingTime() {
+        assertInvalidRescheduleStart(LocalDate.now().plusDays(1).atTime(17, 0));
+    }
+
+    @Test
+    void rescheduleRejectsStartWithSeconds() {
+        assertInvalidRescheduleStart(LocalDate.now().plusDays(1).atTime(9, 17, 1));
+    }
+
+    @Test
+    void rescheduleRejectsStartWithNanoseconds() {
+        assertInvalidRescheduleStart(LocalDate.now().plusDays(1).atTime(9, 17).withNano(1));
+    }
+
+    @Test
+    void rescheduleRejectsStartLessThanThirtyMinutesInAdvance() {
+        LocalDateTime newSlot = LocalDateTime.now().plusMinutes(29).withSecond(0).withNano(0);
+        Booking booking = reschedulableBooking(LocalDate.now().plusDays(1).atTime(9, 0), 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking must be scheduled at least 30 minutes in advance");
+    }
+
+    @Test
+    void rescheduleUsesExactPersistedDurationAtClosingBoundary() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Booking booking = reschedulableBooking(date.atTime(9, 0), 45);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(16, 15)));
+        assertThat(booking.getScheduledAt()).isEqualTo(date.atTime(16, 15));
+
+        assertThatThrownBy(() -> bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(16, 16))))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking duration must end by 17:00");
+    }
+
+    @Test
+    void rescheduleRejectsOverlapAndAllowsBoundaryTouch() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Booking booking = reschedulableBooking(date.atTime(8, 0), 30);
+        Booking existing = bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 45);
+        existing.setId(100L);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(booking, existing));
+
+        assertThatThrownBy(() -> bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(9, 44))))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("This booking slot overlaps an existing booking");
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(date.atTime(9, 45)));
+        assertThat(booking.getScheduledAt()).isEqualTo(date.atTime(9, 45));
+    }
+
+    @Test
+    void rescheduleExcludesTheCurrentBookingFromOverlapChecks() {
+        LocalDateTime newSlot = LocalDate.now().plusDays(1).atTime(10, 0);
+        Booking booking = reschedulableBooking(newSlot, 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));
+
+        assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleDoesNotApplyMembershipBookingWindow() {
+        LocalDateTime newSlot = LocalDate.now().plusDays(8).atTime(9, 0);
+        Booking booking = reschedulableBooking(LocalDate.now().plusDays(1).atTime(9, 0), 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of(booking));
+
+        bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));
+
+        assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
     }
 
     @Test
@@ -801,6 +959,24 @@ class BookingServiceLayerTest {
 
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt, Long rewardRedemptionId) {
         return new BookingDtos.CreateBookingRequest(1L, List.of(1L), scheduledAt, null, rewardRedemptionId, null);
+    }
+
+    private void assertInvalidRescheduleStart(LocalDateTime newSlot) {
+        Booking booking = reschedulableBooking(LocalDate.now().plusDays(1).atTime(9, 0), 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking start time must be between 08:00 and 17:00 with minute precision");
+    }
+
+    private Booking reschedulableBooking(LocalDateTime scheduledAt, int durationMinutes) {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        booking.setScheduledAt(scheduledAt);
+        BookingService item = new BookingService();
+        item.setDurationMinutes(durationMinutes);
+        booking.addService(item);
+        return booking;
     }
 
     private void assertBookingEndTime(LocalTime startTime, int durationMinutes, boolean accepted) {

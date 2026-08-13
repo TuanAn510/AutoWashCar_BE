@@ -269,7 +269,8 @@ public final class BookingDtos {
     public static String toFrontendStatus(BookingStatus status) {
         return switch (status) {
             case PENDING -> "pending";
-            case CONFIRMED, IN_QUEUE -> "confirmed";
+            case CONFIRMED -> "confirmed";
+            case IN_QUEUE -> "in_queue";
             case IN_PROGRESS -> "in_progress";
             case COMPLETED -> "completed";
             case CANCELLED -> "cancelled";
