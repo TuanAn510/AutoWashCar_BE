@@ -31,7 +31,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
@@ -103,23 +102,12 @@ public class BookingServiceLayer {
         validateBookableSlot(request.scheduledAt());
 
         List<Long> requestedServiceIds = request.resolvedServiceIds();
-        if (requestedServiceIds.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "At least one service is required");
+        if (requestedServiceIds.size() != 1) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Exactly one primary service is required");
         }
         List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(requestedServiceIds));
         if (selectedServices.size() != requestedServiceIds.size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
-        }
-
-        // Validate: at most 1 service per category (e.g. only 1 of the 3 car wash services)
-        Map<Long, List<CarWashService>> servicesByCategory = selectedServices.stream()
-                .collect(Collectors.groupingBy(s -> s.getCategory().getId()));
-        for (Map.Entry<Long, List<CarWashService>> entry : servicesByCategory.entrySet()) {
-            if (entry.getValue().size() > 1) {
-                String categoryName = entry.getValue().get(0).getCategory().getName();
-                throw new ApiException(HttpStatus.BAD_REQUEST,
-                        "Chỉ được chọn 1 dịch vụ trong danh mục \"" + categoryName + "\"");
-            }
         }
 
         RewardRedemption redemption = null;
@@ -149,9 +137,9 @@ public class BookingServiceLayer {
         if (freeAddOnService != null) {
             bookedServices.add(freeAddOnService);
         }
-        int requiredSlots = slotsForDuration(totalDuration(bookedServices));
-        validateBookingEndTime(request.scheduledAt(), requiredSlots);
-        validateNoOverlappingBooking(request.scheduledAt(), requiredSlots);
+        int reservationDurationMinutes = totalDuration(bookedServices);
+        validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
+        validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes);
 
         BigDecimal subtotal = selectedServices.stream()
                 .map(CarWashService::getPrice)
@@ -585,9 +573,9 @@ public class BookingServiceLayer {
         if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
         }
-        int requiredSlots = slotsForDuration(totalDuration(booking));
-        validateBookingEndTime(request.scheduledAt(), requiredSlots);
-        validateNoOverlappingBooking(request.scheduledAt(), requiredSlots, booking.getId());
+        int reservationDurationMinutes = totalDuration(booking);
+        validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
+        validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes, booking.getId());
         booking.setScheduledAt(request.scheduledAt());
         auditTrailService.record(
                 actor,
@@ -766,25 +754,26 @@ public class BookingServiceLayer {
         if (slot.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
         }
-        if (activeBookings.stream().anyMatch(booking -> overlaps(slot, endAt(slot, 1), booking.getScheduledAt(), endAt(booking)))) {
+        if (activeBookings.stream().anyMatch(booking -> overlaps(slot, endAt(slot, SLOT_MINUTES), booking.getScheduledAt(), endAt(booking)))) {
             return "BOOKED";
         }
         return null;
     }
 
-    private void validateBookingEndTime(LocalDateTime scheduledAt, int requiredSlots) {
-        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+    private void validateBookingEndTime(LocalDateTime scheduledAt, int reservationDurationMinutes) {
+        LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
         if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Booking duration must end by 17:00");
         }
     }
 
-    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots) {
-        validateNoOverlappingBooking(scheduledAt, requiredSlots, null);
+    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int reservationDurationMinutes) {
+        validateNoOverlappingBooking(scheduledAt, reservationDurationMinutes, null);
     }
 
-    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int requiredSlots, Long ignoredBookingId) {
-        LocalDateTime endAt = endAt(scheduledAt, requiredSlots);
+    private void validateNoOverlappingBooking(
+            LocalDateTime scheduledAt, int reservationDurationMinutes, Long ignoredBookingId) {
+        LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
         boolean overlaps = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(
                         scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
@@ -828,12 +817,8 @@ public class BookingServiceLayer {
         return startAt.isBefore(existingEndAt) && existingStartAt.isBefore(endAt);
     }
 
-    private LocalDateTime endAt(LocalDateTime startAt, int requiredSlots) {
-        return startAt.plusMinutes((long) requiredSlots * SLOT_MINUTES);
-    }
-
-    private int slotsForDuration(int durationMinutes) {
-        return Math.max(1, (durationMinutes + SLOT_MINUTES - 1) / SLOT_MINUTES);
+    private LocalDateTime endAt(LocalDateTime startAt, int durationMinutes) {
+        return startAt.plusMinutes(durationMinutes);
     }
 
     private int totalDuration(List<CarWashService> services) {
@@ -845,7 +830,7 @@ public class BookingServiceLayer {
     }
 
     private LocalDateTime endAt(Booking booking) {
-        return endAt(booking.getScheduledAt(), slotsForDuration(totalDuration(booking)));
+        return endAt(booking.getScheduledAt(), totalDuration(booking));
     }
 
     private boolean isBookableStartTime(LocalTime time) {

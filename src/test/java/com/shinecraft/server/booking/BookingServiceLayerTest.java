@@ -16,6 +16,7 @@ import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
+import com.shinecraft.server.loyalty.Reward;
 import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
@@ -41,6 +42,7 @@ class BookingServiceLayerTest {
     private BookingRepository bookingRepository;
     private VehicleRepository vehicleRepository;
     private CarWashServiceRepository serviceRepository;
+    private RewardRedemptionRepository redemptionRepository;
     private LoyaltyService loyaltyService;
     private PromotionService promotionService;
     private AuthService authService;
@@ -54,6 +56,7 @@ class BookingServiceLayerTest {
         bookingRepository = mock(BookingRepository.class);
         vehicleRepository = mock(VehicleRepository.class);
         serviceRepository = mock(CarWashServiceRepository.class);
+        redemptionRepository = mock(RewardRedemptionRepository.class);
         loyaltyService = mock(LoyaltyService.class);
         promotionService = mock(PromotionService.class);
         authService = mock(AuthService.class);
@@ -62,7 +65,7 @@ class BookingServiceLayerTest {
                 bookingRepository,
                 vehicleRepository,
                 serviceRepository,
-                mock(RewardRedemptionRepository.class),
+                redemptionRepository,
                 loyaltyService,
                 promotionService,
                 authService,
@@ -82,7 +85,7 @@ class BookingServiceLayerTest {
     void availabilityMarksPendingSlotAsBooked() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
-                .thenReturn(List.of(bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING)));
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30)));
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
@@ -126,7 +129,7 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void availabilityRoundsFortyFiveMinutesUpToTwoSlots() {
+    void availabilityMarksThirtyMinuteSuggestionsOverlappingAFortyFiveMinuteBookingAsBooked() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
@@ -236,6 +239,26 @@ class BookingServiceLayerTest {
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("Booking start time must be between 08:00 and 17:00 with minute precision");
+    }
+
+    @Test
+    void createRejectsZeroPrimaryServices() {
+        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 0);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt, List.of())))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Exactly one primary service is required");
+    }
+
+    @Test
+    void createRejectsMoreThanOnePrimaryService() {
+        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 0);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt, List.of(1L, 2L))))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Exactly one primary service is required");
     }
 
     @Test
@@ -349,38 +372,73 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createUsesTheSumOfSelectedServiceDurationsForOverlapChecks() {
+    void createUsesExactDurationForOverlapAndAllowsBoundaryTouch() {
         LocalDate date = LocalDate.now().plusDays(1);
-        LocalDateTime scheduledAt = date.atTime(9, 0);
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
-        when(serviceRepository.findAllById(List.of(1L, 2L)))
-                .thenReturn(List.of(serviceWithDuration(30), serviceWithDuration(60)));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
-                .thenReturn(List.of(bookingAt(date, LocalTime.of(10, 0), BookingStatus.PENDING, 30)));
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt, List.of(1L, 2L))))
+        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(9, 44))))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("This booking slot overlaps an existing booking");
+        assertThat(bookingService.create(requestAt(date.atTime(9, 45)))).isNotNull();
     }
 
     @Test
-    void createAllowsABookingEndingExactlyAtClosingTime() {
-        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(16, 30);
+    void createAllowsThirtyMinuteBookingEndingExactlyAtClosingTime() {
+        assertBookingEndTime(LocalTime.of(16, 30), 30, true);
+    }
+
+    @Test
+    void createRejectsThirtyMinuteBookingEndingAfterClosingTime() {
+        assertBookingEndTime(LocalTime.of(16, 31), 30, false);
+    }
+
+    @Test
+    void createAllowsFortyFiveMinuteBookingEndingExactlyAtClosingTime() {
+        assertBookingEndTime(LocalTime.of(16, 15), 45, true);
+    }
+
+    @Test
+    void createRejectsFortyFiveMinuteBookingEndingAfterClosingTime() {
+        assertBookingEndTime(LocalTime.of(16, 16), 45, false);
+    }
+
+    @Test
+    void createAllowsNinetyMinuteBookingEndingExactlyAtClosingTime() {
+        assertBookingEndTime(LocalTime.of(15, 30), 90, true);
+    }
+
+    @Test
+    void createRejectsNinetyMinuteBookingEndingAfterClosingTime() {
+        assertBookingEndTime(LocalTime.of(15, 31), 90, false);
+    }
+
+    @Test
+    void createIncludesAddOnExactDurationInReservationTime() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        CarWashService primaryService = serviceWithDuration(45);
+        primaryService.setId(1L);
+        CarWashService addOnService = serviceWithDuration(15);
+        addOnService.setId(2L);
+        Reward reward = new Reward();
+        reward.setId(1L);
+        reward.setRewardType(com.shinecraft.server.loyalty.RewardType.ADD_ON);
+        reward.setAddOnService(addOnService);
+        RewardRedemption redemption = new RewardRedemption();
+        redemption.setCustomer(customer);
+        redemption.setReward(reward);
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
-        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(primaryService));
+        when(redemptionRepository.findByIdAndCustomerAndStatus(10L, customer, RewardRedemptionStatus.AVAILABLE))
+                .thenReturn(java.util.Optional.of(redemption));
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
         when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
-    }
-
-    @Test
-    void createRejectsABookingThatEndsAfterClosingTime() {
-        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(16, 30);
-        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
-        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(45)));
-
-        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+        assertThat(bookingService.create(requestAt(date.atTime(16, 0), 10L))).isNotNull();
+        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(16, 1), 10L)))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("Booking duration must end by 17:00");
     }
@@ -739,6 +797,26 @@ class BookingServiceLayerTest {
 
     private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt, List<Long> serviceIds) {
         return new BookingDtos.CreateBookingRequest(1L, serviceIds, scheduledAt, null, null, null);
+    }
+
+    private BookingDtos.CreateBookingRequest requestAt(LocalDateTime scheduledAt, Long rewardRedemptionId) {
+        return new BookingDtos.CreateBookingRequest(1L, List.of(1L), scheduledAt, null, rewardRedemptionId, null);
+    }
+
+    private void assertBookingEndTime(LocalTime startTime, int durationMinutes, boolean accepted) {
+        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(startTime);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(durationMinutes)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        if (accepted) {
+            assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
+            return;
+        }
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking duration must end by 17:00");
     }
 
     private Booking bookingAt(LocalDate date, LocalTime time, BookingStatus status) {
