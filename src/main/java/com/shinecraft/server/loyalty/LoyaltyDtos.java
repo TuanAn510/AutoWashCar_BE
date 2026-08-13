@@ -118,6 +118,7 @@ public final class LoyaltyDtos {
             @JsonProperty("_id") String uid,
             String type,
             Integer points,
+            Integer remainingPoints,
             String description,
             LocalDateTime expiresAt,
             LocalDateTime createdAt) {
@@ -127,6 +128,19 @@ public final class LoyaltyDtos {
                     String.valueOf(transaction.getId()),
                     transaction.getType().name().toLowerCase(),
                     transaction.getPoints(),
+                    null,
+                    transaction.getDescription(),
+                    transaction.getExpiresAt(),
+                    transaction.getCreatedAt());
+        }
+
+        public static TransactionResponse from(LoyaltyTransaction transaction, Integer remainingPoints) {
+            return new TransactionResponse(
+                    transaction.getId(),
+                    String.valueOf(transaction.getId()),
+                    transaction.getType().name().toLowerCase(),
+                    transaction.getPoints(),
+                    remainingPoints,
                     transaction.getDescription(),
                     transaction.getExpiresAt(),
                     transaction.getCreatedAt());
