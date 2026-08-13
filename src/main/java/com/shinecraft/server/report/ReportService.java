@@ -1,6 +1,7 @@
 package com.shinecraft.server.report;
 
 import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingPaymentStatus;
 import com.shinecraft.server.booking.BookingRepository;
 import com.shinecraft.server.booking.BookingService;
 import com.shinecraft.server.booking.BookingStatus;
@@ -36,7 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ReportService {
-    private static final String REVENUE_SOURCE = "bookings";
+    private static final String REVENUE_SOURCE = "paid_bookings";
 
     private final UserRepository userRepository;
     private final BookingRepository bookingRepository;
@@ -72,6 +73,7 @@ public class ReportService {
         List<LoyaltyTransaction> transactions = transactionRepository.findAll();
         LocalDateTime now = LocalDateTime.now();
         List<Booking> completedBookings = bookings.stream().filter(this::isCompleted).toList();
+        List<Booking> paidBookings = bookings.stream().filter(this::isPaid).toList();
         return new ReportDtos.DashboardResponse(
                 userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER).size(),
                 vehicleRepository.findAll().stream().filter(Vehicle::isActive).count(),
@@ -83,7 +85,7 @@ public class ReportService {
                         .size(),
                 loyaltyAccountRepository.count(),
                 rewardRepository.findByIsActiveTrueOrderByRequiredPointsAsc().size(),
-                completedBookings.stream()
+                paidBookings.stream()
                         .map(Booking::getFinalAmount)
                         .filter(Objects::nonNull)
                         .reduce(BigDecimal.ZERO, BigDecimal::add),
@@ -93,7 +95,7 @@ public class ReportService {
 
     @Transactional(readOnly = true)
     public ReportDtos.RevenueReport revenue(ReportDtos.ReportRange range, String period) {
-        List<Booking> bookings = bookingsInRange(range).stream().filter(this::isCompleted).toList();
+        List<Booking> bookings = paidBookingsInReportRange(range);
         Map<String, ReportDtos.RevenueReportItem> grouped = new LinkedHashMap<>();
         for (Booking booking : bookings) {
             LocalDateTime date = reportDate(booking);
@@ -177,10 +179,7 @@ public class ReportService {
             statsByService.put(
                     service.getId(), new ServiceStats(String.valueOf(service.getId()), service.getName(), 0, BigDecimal.ZERO));
         }
-        for (Booking booking : bookingsInRange(range)) {
-            if (!isCompleted(booking)) {
-                continue;
-            }
+        for (Booking booking : paidBookingsInReportRange(range)) {
             for (BookingService item : booking.getServices()) {
                 Long id = item.getService().getId();
                 ServiceStats stats = statsByService.computeIfAbsent(
@@ -299,6 +298,14 @@ public class ReportService {
                 .toList();
     }
 
+    private List<Booking> paidBookingsInReportRange(ReportDtos.ReportRange range) {
+        return bookingRepository.findAll().stream()
+                .filter(this::isPaid)
+                .filter(booking -> dateInRange(reportDate(booking), range))
+                .sorted(Comparator.comparing(this::reportDate))
+                .toList();
+    }
+
     private List<LoyaltyTransaction> transactionsInRange(ReportDtos.ReportRange range) {
         return transactionRepository.findAll().stream()
                 .filter(transaction -> dateInRange(transaction.getCreatedAt(), range))
@@ -316,8 +323,18 @@ public class ReportService {
         return booking.getStatus() == BookingStatus.COMPLETED;
     }
 
+    private boolean isPaid(Booking booking) {
+        return booking.getPaymentStatus() == BookingPaymentStatus.PAID;
+    }
+
     private LocalDateTime reportDate(Booking booking) {
-        return booking.getCompletedAt() == null ? booking.getScheduledAt() : booking.getCompletedAt();
+        if (booking.getPaidAt() != null) {
+            return booking.getPaidAt();
+        }
+        if (booking.getCompletedAt() != null) {
+            return booking.getCompletedAt();
+        }
+        return booking.getScheduledAt();
     }
 
     private boolean createdInRange(LocalDateTime value, ReportDtos.ReportRange range) {
@@ -325,7 +342,9 @@ public class ReportService {
     }
 
     private boolean dateInRange(LocalDateTime value, ReportDtos.ReportRange range) {
-        return value != null && !value.isBefore(range.start()) && value.isBefore(range.endExclusive());
+        return value != null
+                && (range.start() == null || !value.isBefore(range.start()))
+                && (range.endExclusive() == null || value.isBefore(range.endExclusive()));
     }
 
     private String groupKey(LocalDateTime value, String period) {

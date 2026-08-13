@@ -42,7 +42,7 @@ public class ReportController {
                         "totalLoyaltyMembers", dashboard.loyaltyMembers(),
                         "totalPointsIssued", dashboard.issuedPoints(),
                         "totalPointsRedeemed", dashboard.redeemedPoints(),
-                        "revenue", Map.of("total", dashboard.revenue(), "source", "bookings")));
+                        "revenue", Map.of("total", dashboard.revenue(), "source", "paid_bookings")));
     }
 
     @GetMapping("/api/reports/revenue")
@@ -97,6 +97,10 @@ public class ReportController {
         LocalDate endDate = parseDate(params.get("endDate"));
         YearMonth startMonth = parseMonth(params.get("startMonth"));
         YearMonth endMonth = parseMonth(params.get("endMonth"));
+
+        if (startDate == null && endDate == null && startMonth == null && endMonth == null) {
+            return new ReportDtos.ReportRange(null, null);
+        }
 
         LocalDateTime start = startDate != null
                 ? startDate.atStartOfDay()
