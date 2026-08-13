@@ -27,8 +27,11 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    ApiResponse<UserDtos.AuthResponse> register(@Valid @RequestBody UserDtos.RegisterRequest request) {
-        return ApiResponse.ok("Registration successful", authService.register(request));
+    ApiResponse<UserDtos.AuthResponse> register(
+            @Valid @RequestBody UserDtos.RegisterRequest request, HttpServletResponse response) {
+        UserDtos.AuthResponse auth = authService.register(request);
+        addRefreshCookie(response, auth.refreshToken());
+        return ApiResponse.ok("Registration successful", auth);
     }
 
     @PostMapping("/login")
@@ -45,8 +48,11 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    ApiResponse<UserDtos.UserResponse> signup(@Valid @RequestBody UserDtos.SignupRequest request) {
-        return ApiResponse.ok("Signup successful", authService.signup(request));
+    ApiResponse<UserDtos.AuthResponse> signup(
+            @Valid @RequestBody UserDtos.SignupRequest request, HttpServletResponse response) {
+        UserDtos.AuthResponse auth = authService.signup(request);
+        addRefreshCookie(response, auth.refreshToken());
+        return ApiResponse.ok("Signup successful", auth);
     }
 
     @PostMapping("/refresh")

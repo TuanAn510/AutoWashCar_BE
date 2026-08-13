@@ -95,7 +95,7 @@ public class AuthService {
     }
 
     @Transactional
-    public UserDtos.UserResponse signup(UserDtos.SignupRequest request) {
+    public UserDtos.AuthResponse signup(UserDtos.SignupRequest request) {
         String phone = PhoneNormalizer.normalize(request.phone());
         if (userRepository.existsByPhone(phone)) {
             throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
@@ -115,7 +115,7 @@ public class AuthService {
                 .orElse(null));
         loyaltyAccountRepository.save(account);
 
-        return UserDtos.UserResponse.from(user);
+        return authResponse(user);
     }
 
     public UserDtos.AuthResponse refresh(UserDtos.RefreshTokenRequest request) {

@@ -163,6 +163,38 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void signupReturnsAuthenticatedSessionAndRefreshCookie() throws Exception {
+        int unique = SEQUENCE.getAndIncrement();
+        String phone = "09" + unique;
+
+        MvcResult result = mockMvc.perform(post("/api/auth/signup")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "firstName": "New",
+                                  "lastName": "Customer",
+                                  "phone": "%s",
+                                  "password": "Password@123"
+                                }
+                                """
+                                .formatted(phone)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.data.accessToken", notNullValue()))
+                .andExpect(jsonPath("$.data.refreshToken", notNullValue()))
+                .andExpect(jsonPath("$.data.user.phone", is(phone)))
+                .andReturn();
+
+        assertThat(result.getResponse().getCookie("refreshToken")).isNotNull();
+        String accessToken = JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+
+        mockMvc.perform(get("/api/auth/me").header("Authorization", bearer(accessToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.phone", is(phone)))
+                .andExpect(jsonPath("$.data.role", is("customer")));
+    }
+
+    @Test
     void refreshTokenRotatesAndOldTokenCannotBeReused() throws Exception {
         CustomerContext customer = registerCustomer();
 
@@ -1207,6 +1239,7 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath("$.data.token", notNullValue()))
                 .andExpect(jsonPath("$.data.refreshToken", notNullValue()))
                 .andReturn();
+        assertThat(result.getResponse().getCookie("refreshToken")).isNotNull();
 
         String token = JsonPath.read(result.getResponse().getContentAsString(), "$.data.token");
         String refreshToken = JsonPath.read(result.getResponse().getContentAsString(), "$.data.refreshToken");

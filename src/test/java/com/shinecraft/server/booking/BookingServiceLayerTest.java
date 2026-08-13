@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
+import com.shinecraft.server.catalog.ServiceCategory;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
@@ -67,8 +68,8 @@ class BookingServiceLayerTest {
                 authService,
                 userRepository,
                 mock(AuditTrailService.class),
-                10000,
-                true);
+                true,
+                10000);
 
         customer = new User();
         customer.setRole(UserRole.ROLE_ADMIN);
@@ -757,6 +758,10 @@ class BookingServiceLayerTest {
 
     private CarWashService serviceWithDuration(int durationMinutes) {
         CarWashService service = new CarWashService();
+        ServiceCategory category = new ServiceCategory();
+        category.setId((long) durationMinutes);
+        category.setName("Category " + durationMinutes);
+        service.setCategory(category);
         service.setDurationMinutes(durationMinutes);
         service.setPrice(BigDecimal.TEN);
         service.setActive(true);
@@ -788,6 +793,7 @@ class BookingServiceLayerTest {
         booking.setCustomer(customer);
         booking.setVehicle(new Vehicle());
         booking.setStatus(status);
+        booking.setScheduledAt(LocalDateTime.now().minusMinutes(30));
         booking.setSubtotalAmount(BigDecimal.valueOf(10000));
         booking.setDiscountAmount(BigDecimal.ZERO);
         booking.setFinalAmount(BigDecimal.valueOf(10000));
