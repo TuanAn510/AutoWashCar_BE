@@ -484,6 +484,17 @@ class BookingServiceLayerTest {
     }
 
     @Test
+    void statusRejectsConfirmedToInProgressWithoutCheckIn() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Invalid booking status transition from CONFIRMED to IN_PROGRESS");
+        assertThat(booking.getCheckInAt()).isNull();
+    }
+
+    @Test
     void statusRejectsTransitionsOutOfTerminalStates() {
         assertInvalidTransition(BookingStatus.COMPLETED, BookingStatus.CONFIRMED);
         assertInvalidTransition(BookingStatus.CANCELLED, BookingStatus.CONFIRMED);
@@ -556,6 +567,41 @@ class BookingServiceLayerTest {
 
         assertThat(response.status()).isEqualTo(BookingStatus.IN_QUEUE);
         assertThat(booking.getCheckInAt()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void appointmentResponseExposesInQueueStatus() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_QUEUE);
+
+        BookingDtos.AppointmentResponse response = BookingDtos.AppointmentResponse.from(booking);
+
+        assertThat(response.status()).isEqualTo("in_queue");
+    }
+
+    @Test
+    void assignedStaffCanAdvanceThroughQueueLifecycleButCannotCancel() {
+        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        User staff = new User();
+        staff.setId(7L);
+        staff.setRole(UserRole.ROLE_STAFF);
+        booking.setAssignedStaff(staff);
+        when(authService.currentUser()).thenReturn(staff);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.IN_QUEUE);
+        LocalDateTime checkInAt = booking.getCheckInAt();
+        bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS);
+        bookingService.updateStatus(99L, BookingStatus.COMPLETED);
+
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
+
+        Booking cancellable = bookingWithStatus(BookingStatus.CONFIRMED);
+        cancellable.setAssignedStaff(staff);
+        when(bookingRepository.findById(100L)).thenReturn(java.util.Optional.of(cancellable));
+        assertThatThrownBy(() -> bookingService.updateStatus(100L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("You do not have permission to update this appointment status");
     }
 
     @Test

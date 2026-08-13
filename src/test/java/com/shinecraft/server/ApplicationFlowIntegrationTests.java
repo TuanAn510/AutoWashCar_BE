@@ -1179,6 +1179,9 @@ class ApplicationFlowIntegrationTests {
         mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "CONFIRMED"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status", is("confirmed")));
+        mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "IN_QUEUE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("in_queue")));
         mockMvc.perform(appointmentStatusPatch(staffToken, assignedBookingId, "IN_PROGRESS"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status", is("in_progress")));

@@ -48,7 +48,7 @@ public class BookingServiceLayer {
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
             BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
-            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
             BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
             BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
             BookingStatus.COMPLETED, Set.of(),
@@ -443,7 +443,7 @@ public class BookingServiceLayer {
                     "Không thể bắt đầu hoặc hoàn thành lịch hẹn trước thời gian đã lên lịch");
         }
         if (currentStatus == BookingStatus.CONFIRMED
-                    && (status == BookingStatus.IN_QUEUE || status == BookingStatus.IN_PROGRESS)
+                    && status == BookingStatus.IN_QUEUE
                     && booking.getCheckInAt() == null) {
             booking.setCheckInAt(LocalDateTime.now());
         }
@@ -617,6 +617,7 @@ public class BookingServiceLayer {
         }
         if (actor.getRole() == UserRole.ROLE_STAFF && sameUser(actor, booking.getAssignedStaff())) {
             if (requestedStatus == BookingStatus.CONFIRMED
+                    || requestedStatus == BookingStatus.IN_QUEUE
                     || requestedStatus == BookingStatus.IN_PROGRESS
                     || requestedStatus == BookingStatus.COMPLETED) {
                 return;
