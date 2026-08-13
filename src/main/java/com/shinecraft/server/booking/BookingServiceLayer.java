@@ -573,6 +573,8 @@ public class BookingServiceLayer {
         if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
         }
+        validateMinimumLeadTime(request.scheduledAt());
+        validateBookableStartTime(request.scheduledAt());
         int reservationDurationMinutes = totalDuration(booking);
         validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
         validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes, booking.getId());
@@ -738,11 +740,15 @@ public class BookingServiceLayer {
     }
 
     private void validateBookableSlot(LocalDateTime scheduledAt) {
-        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
-        }
+        validateBookableStartTime(scheduledAt);
         if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
+        }
+    }
+
+    private void validateBookableStartTime(LocalDateTime scheduledAt) {
+        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
         }
     }
 
