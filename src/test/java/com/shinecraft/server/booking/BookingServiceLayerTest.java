@@ -192,6 +192,38 @@ class BookingServiceLayerTest {
     }
 
     @Test
+    void createRejectsStartLessThanThirtyMinutesInAdvance() {
+        LocalDateTime scheduledAt = LocalDateTime.now().plusMinutes(29).withSecond(0).withNano(0);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking must be scheduled at least 30 minutes in advance");
+    }
+
+    @Test
+    void createAllowsStartMoreThanThirtyMinutesInAdvance() {
+        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 23);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(30)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
+    }
+
+    @Test
+    void createRejectsSelectionThatBecameStaleBeforeSubmission() {
+        LocalDateTime selectionTime = LocalDateTime.now().minusMinutes(1);
+        LocalDateTime scheduledAt = selectionTime.plusMinutes(30).withSecond(0).withNano(0);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking must be scheduled at least 30 minutes in advance");
+    }
+
+    @Test
     void createRejectsAnOutOfHoursSlot() {
         LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(17, 0);
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
