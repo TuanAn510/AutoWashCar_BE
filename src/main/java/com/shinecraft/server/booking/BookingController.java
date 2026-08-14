@@ -189,6 +189,7 @@ public class BookingController {
                 appointments.size(),
                 appointments.stream().filter(appointment -> appointment.status().equals("pending")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("confirmed")).count(),
+                appointments.stream().filter(appointment -> appointment.status().equals("in_queue")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("in_progress")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("completed")).count(),
                 appointments.stream().filter(appointment -> appointment.status().equals("cancelled")).count());

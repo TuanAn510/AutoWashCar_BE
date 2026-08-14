@@ -284,6 +284,7 @@ public final class BookingDtos {
             long total,
             long pending,
             long confirmed,
+            long inQueue,
             long inProgress,
             long completed,
             long cancelled) {
@@ -292,7 +293,8 @@ public final class BookingDtos {
                     bookings.size(),
                     count(bookings, BookingStatus.PENDING),
                     count(bookings, BookingStatus.CONFIRMED),
-                    count(bookings, BookingStatus.IN_PROGRESS) + count(bookings, BookingStatus.IN_QUEUE),
+                    count(bookings, BookingStatus.IN_QUEUE),
+                    count(bookings, BookingStatus.IN_PROGRESS),
                     count(bookings, BookingStatus.COMPLETED),
                     count(bookings, BookingStatus.CANCELLED));
         }

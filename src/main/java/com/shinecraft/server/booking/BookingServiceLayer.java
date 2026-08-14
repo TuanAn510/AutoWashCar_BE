@@ -48,7 +48,6 @@ public class BookingServiceLayer {
     private static final int AVAILABILITY_SUGGESTION_MINUTES = 15;
     private static final int DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
     private static final int MINIMUM_LEAD_TIME_MINUTES = 30;
-    private static final int SHOP_CONCURRENT_CAPACITY = 2;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
@@ -68,6 +67,7 @@ public class BookingServiceLayer {
     private final UserRepository userRepository;
     private final AuditTrailService auditTrailService;
     private final VnPayService vnPayService;
+    private final int shopConcurrentCapacity;
     private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
@@ -82,6 +82,7 @@ public class BookingServiceLayer {
             UserRepository userRepository,
             AuditTrailService auditTrailService,
             VnPayService vnPayService,
+            @Value("${app.booking.shop-concurrent-capacity:2}") int shopConcurrentCapacity,
             @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
@@ -94,6 +95,7 @@ public class BookingServiceLayer {
         this.userRepository = userRepository;
         this.auditTrailService = auditTrailService;
         this.vnPayService = vnPayService;
+        this.shopConcurrentCapacity = Math.max(1, shopConcurrentCapacity);
         this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
     }
@@ -349,8 +351,8 @@ public class BookingServiceLayer {
     private boolean matchesStatus(Booking booking, String frontendStatus) {
         return switch (frontendStatus.toLowerCase()) {
             case "pending" -> booking.getStatus() == BookingStatus.PENDING;
-            case "confirmed" -> booking.getStatus() == BookingStatus.CONFIRMED
-                    || booking.getStatus() == BookingStatus.IN_QUEUE;
+            case "confirmed" -> booking.getStatus() == BookingStatus.CONFIRMED;
+            case "in_queue" -> booking.getStatus() == BookingStatus.IN_QUEUE;
             case "in_progress" -> booking.getStatus() == BookingStatus.IN_PROGRESS;
             case "completed" -> booking.getStatus() == BookingStatus.COMPLETED;
             case "cancelled" -> booking.getStatus() == BookingStatus.CANCELLED;
@@ -1021,7 +1023,7 @@ public class BookingServiceLayer {
 
     private int effectiveShopCapacity() {
         int activeStaffCount = userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF).size();
-        return Math.min(SHOP_CONCURRENT_CAPACITY, activeStaffCount);
+        return Math.min(shopConcurrentCapacity, activeStaffCount);
     }
 
     private boolean isBookableStartTime(LocalTime time) {

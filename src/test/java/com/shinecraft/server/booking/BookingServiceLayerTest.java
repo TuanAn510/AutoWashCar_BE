@@ -73,6 +73,7 @@ class BookingServiceLayerTest {
                 userRepository,
                 mock(AuditTrailService.class),
                 mock(VnPayService.class),
+                2,
                 true,
                 10000);
 
@@ -695,6 +696,37 @@ class BookingServiceLayerTest {
         BookingDtos.AppointmentResponse response = BookingDtos.AppointmentResponse.from(booking);
 
         assertThat(response.status()).isEqualTo("in_queue");
+    }
+
+    @Test
+    void appointmentSummaryCountsQueueSeparatelyFromInProgress() {
+        BookingDtos.AppointmentStatusSummary summary = BookingDtos.AppointmentStatusSummary.from(List.of(
+                bookingWithStatus(BookingStatus.CONFIRMED),
+                bookingWithStatus(BookingStatus.IN_QUEUE),
+                bookingWithStatus(BookingStatus.IN_PROGRESS)));
+
+        assertThat(summary.confirmed()).isEqualTo(1);
+        assertThat(summary.inQueue()).isEqualTo(1);
+        assertThat(summary.inProgress()).isEqualTo(1);
+    }
+
+    @Test
+    void appointmentFiltersConfirmedAndQueueStatusesSeparately() {
+        Booking confirmed = bookingWithStatus(BookingStatus.CONFIRMED);
+        confirmed.setId(1L);
+        Booking inQueue = bookingWithStatus(BookingStatus.IN_QUEUE);
+        inQueue.setId(2L);
+        when(bookingRepository.findAllByOrderByScheduledAtDesc()).thenReturn(List.of(confirmed, inQueue));
+
+        BookingDtos.AppointmentPageResponse confirmedResponse = bookingService.allAppointments(
+                new BookingDtos.AppointmentFilterParams(null, "confirmed", null, null, null, 1, 10, "scheduledAt", "asc"));
+        BookingDtos.AppointmentPageResponse queueResponse = bookingService.allAppointments(
+                new BookingDtos.AppointmentFilterParams(null, "in_queue", null, null, null, 1, 10, "scheduledAt", "asc"));
+
+        assertThat(confirmedResponse.appointments()).extracting(BookingDtos.AppointmentResponse::status)
+                .containsExactly("confirmed");
+        assertThat(queueResponse.appointments()).extracting(BookingDtos.AppointmentResponse::status)
+                .containsExactly("in_queue");
     }
 
     @Test
