@@ -32,6 +32,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,7 +45,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
-    private static final int SLOT_MINUTES = 30;
+    private static final int AVAILABILITY_SUGGESTION_MINUTES = 15;
+    private static final int DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
+    private static final int MINIMUM_LEAD_TIME_MINUTES = 30;
     private static final int SHOP_CONCURRENT_CAPACITY = 2;
     private static final int MAX_ACTIVE_BOOKINGS_PER_VEHICLE = 2;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
@@ -404,7 +407,9 @@ public class BookingServiceLayer {
                         .findByIdAndCustomer(vehicleId, customer)
                         .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
         List<CarWashService> requestedServices = resolveAvailabilityServices(serviceId, rewardRedemptionId, customer);
-        int reservationDurationMinutes = requestedServices.isEmpty() ? SLOT_MINUTES : totalDuration(requestedServices);
+        int reservationDurationMinutes = requestedServices.isEmpty()
+                ? DEFAULT_AVAILABILITY_DURATION_MINUTES
+                : totalDuration(requestedServices);
         List<Booking> activeBookings = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
@@ -415,7 +420,8 @@ public class BookingServiceLayer {
                 : bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
         int effectiveCapacity = effectiveShopCapacity();
 
-        List<BookingDtos.SlotResponse> slots = Stream.iterate(date.atTime(OPEN_TIME), time -> time.plusMinutes(SLOT_MINUTES))
+        List<BookingDtos.SlotResponse> slots = Stream.iterate(
+                        date.atTime(OPEN_TIME), time -> time.plusMinutes(AVAILABILITY_SUGGESTION_MINUTES))
                 .limit(slotCount())
                 .map(slot -> {
                     String reason = slotReason(
@@ -806,7 +812,7 @@ public class BookingServiceLayer {
     }
 
     private void validateMinimumLeadTime(LocalDateTime scheduledAt) {
-        if (scheduledAt.isBefore(LocalDateTime.now().plusMinutes(30))) {
+        if (scheduledAt.isBefore(LocalDateTime.now().plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST, "Booking must be scheduled at least 30 minutes in advance");
         }
@@ -846,7 +852,7 @@ public class BookingServiceLayer {
         if (enforceVehicleRules && overlapsAny(slot, slotEndAt, activeVehicleBookings)) {
             return "VEHICLE_OVERLAP";
         }
-        if (overlappingCount(slot, slotEndAt, activeBookings) >= effectiveCapacity) {
+        if (wouldExceedShopCapacity(slot, slotEndAt, activeBookings, effectiveCapacity)) {
             return "CAPACITY_FULL";
         }
         return null;
@@ -890,15 +896,14 @@ public class BookingServiceLayer {
         if (effectiveCapacity < 1) {
             throw new ApiException(HttpStatus.CONFLICT, "No active staff is available for booking");
         }
-        long overlappingBookings = bookingRepository
+        List<Booking> activeBookings = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(
                         scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
                 .stream()
                 .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
                 .filter(existing -> OCCUPIED_STATUSES.contains(existing.getStatus()))
-                .filter(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)))
-                .count();
-        if (overlappingBookings >= effectiveCapacity) {
+                .toList();
+        if (wouldExceedShopCapacity(scheduledAt, endAt, activeBookings, effectiveCapacity)) {
             throw new ApiException(HttpStatus.CONFLICT, "Booking capacity is full for this time range");
         }
     }
@@ -965,10 +970,29 @@ public class BookingServiceLayer {
         return bookings.stream().anyMatch(booking -> overlaps(startAt, endAt, booking.getScheduledAt(), endAt(booking)));
     }
 
-    private long overlappingCount(LocalDateTime startAt, LocalDateTime endAt, List<Booking> bookings) {
-        return bookings.stream()
-                .filter(booking -> overlaps(startAt, endAt, booking.getScheduledAt(), endAt(booking)))
-                .count();
+    private boolean wouldExceedShopCapacity(
+            LocalDateTime requestStartAt, LocalDateTime requestEndAt, List<Booking> bookings, int effectiveCapacity) {
+        TreeMap<LocalDateTime, Integer> concurrencyChanges = new TreeMap<>();
+        bookings.stream()
+                .filter(booking -> overlaps(requestStartAt, requestEndAt, booking.getScheduledAt(), endAt(booking)))
+                .forEach(booking -> {
+                    LocalDateTime overlapStartAt = booking.getScheduledAt().isBefore(requestStartAt)
+                            ? requestStartAt
+                            : booking.getScheduledAt();
+                    LocalDateTime bookingEndAt = endAt(booking);
+                    LocalDateTime overlapEndAt = bookingEndAt.isAfter(requestEndAt) ? requestEndAt : bookingEndAt;
+                    concurrencyChanges.merge(overlapStartAt, 1, Integer::sum);
+                    concurrencyChanges.merge(overlapEndAt, -1, Integer::sum);
+                });
+
+        int concurrentBookings = 0;
+        for (Map.Entry<LocalDateTime, Integer> change : concurrencyChanges.entrySet()) {
+            concurrentBookings += change.getValue();
+            if (change.getKey().isBefore(requestEndAt) && concurrentBookings >= effectiveCapacity) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private LocalDateTime endAt(LocalDateTime startAt, int durationMinutes) {
@@ -1025,7 +1049,7 @@ public class BookingServiceLayer {
     }
 
     private long slotCount() {
-        return java.time.Duration.between(OPEN_TIME, CLOSE_TIME).toMinutes() / SLOT_MINUTES;
+        return java.time.Duration.between(OPEN_TIME, CLOSE_TIME).toMinutes() / AVAILABILITY_SUGGESTION_MINUTES;
     }
 
     private BigDecimal discountForPromotion(BigDecimal base, Promotion promotion) {

@@ -88,6 +88,23 @@ class BookingServiceLayerTest {
     }
 
     @Test
+    void availabilityUsesFifteenMinuteSuggestionsAndKeepsThirtyMinuteFallbackDuration() {
+        LocalDate date = LocalDate.now().plusDays(1);
+
+        BookingDtos.AvailabilityResponse response = bookingService.availability(date);
+
+        assertThat(response.slots()).hasSize(36);
+        assertThat(response.slots().stream().limit(5).map(BookingDtos.SlotResponse::startAt).toList())
+                .containsExactly(
+                        date.atTime(8, 0),
+                        date.atTime(8, 15),
+                        date.atTime(8, 30),
+                        date.atTime(8, 45),
+                        date.atTime(9, 0));
+        assertSlot(response, date, LocalTime.of(16, 45), false, "OUT_OF_BUSINESS_HOURS");
+    }
+
+    @Test
     void availabilityKeepsSlotAvailableWhenCapacityRemains() {
         LocalDate date = LocalDate.now().plusDays(1);
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
@@ -220,6 +237,39 @@ class BookingServiceLayerTest {
                 .thenReturn(List.of(
                         bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 30),
                         bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 30)));
+
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Booking capacity is full for this time range");
+    }
+
+    @Test
+    void createAllowsRequestSpanningSequentialBookingsWhenCapacityIsNeverExceeded() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        LocalDateTime scheduledAt = date.atTime(8, 0);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(60)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30),
+                        bookingAt(date, LocalTime.of(8, 30), BookingStatus.CONFIRMED, 30)));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
+    }
+
+    @Test
+    void createRejectsRequestWhenCapacityIsExceededDuringPartOfItsInterval() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        LocalDateTime scheduledAt = date.atTime(8, 30);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findAllById(List.of(1L))).thenReturn(List.of(serviceWithDuration(45)));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 45),
+                        bookingAt(date, LocalTime.of(8, 15), BookingStatus.CONFIRMED, 45)));
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
