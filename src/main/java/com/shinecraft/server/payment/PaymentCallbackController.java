@@ -39,7 +39,7 @@ public class PaymentCallbackController {
         Map<String, String> params = extractParams(request);
 
         if (!vnPayService.verifyIpn(params)) {
-            return redirectToFe("failure", "Invalid signature");
+            return redirectToFe("failure", "Invalid signature", null);
         }
 
         String txnRef = vnPayService.getTxnRef(params);
@@ -48,11 +48,11 @@ public class PaymentCallbackController {
         if (vnPayService.isPaymentSuccessful(params)) {
             bookingService.confirmPaymentInternal(
                     bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, txnRef);
-            return redirectToFe("success", null);
+            return redirectToFe("success", null, bookingId);
         } else {
             bookingService.confirmPaymentInternal(
                     bookingId, BookingPaymentStatus.CANCELLED, BookingPaymentMethod.VNPAY, txnRef);
-            return redirectToFe("failure", "Payment was not successful");
+            return redirectToFe("failure", "Payment was not successful", bookingId);
         }
     }
 
@@ -98,9 +98,13 @@ public class PaymentCallbackController {
         }
     }
 
-    private String redirectToFe(String status, String message) {
+    private String redirectToFe(String status, String message, Long bookingId) {
         StringBuilder url = new StringBuilder(frontendUrl);
-        url.append("/customer/payment/result?status=").append(status);
+        url.append("/customer/payment/result");
+        if (bookingId != null) {
+            url.append("/").append(bookingId);
+        }
+        url.append("?status=").append(status);
         if (message != null) {
             url.append("&message=").append(urlEncode(message));
         }

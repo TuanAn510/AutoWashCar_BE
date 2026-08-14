@@ -493,25 +493,15 @@ public class BookingServiceLayer {
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
             booking.setCompletedAt(LocalDateTime.now());
-            int points = booking.getSubtotalAmount()
-                    .divide(BigDecimal.valueOf(pointsAmountUnit), 0, RoundingMode.DOWN)
-                    .intValue();
-
-            // Double points if booking includes the 850K service (Chăm Sóc Toàn Diện)
-            boolean has850KService = booking.getServices().stream()
-                    .anyMatch(bs -> bs.getPrice().compareTo(new BigDecimal("850000")) == 0);
-            if (has850KService) {
-                points = points * 2;
-            }
-
-            booking.setEarnedPoints(points);
-            if (points > 0) {
-                loyaltyService.earnPoints(
-                        booking.getCustomer(),
-                        booking.getFinalAmount(),
-                        points,
-                        "Earned points from booking #" + booking.getId(),
-                        booking);
+            awardPointsForBooking(booking);
+            // Cash is collected on-site by staff. When the appointment is completed,
+            // auto-confirm the payment as PAID so admin sees it paid without a separate
+            // confirmation (only admin could previously confirm cash payments).
+            if (booking.getPaymentMethod() == BookingPaymentMethod.CASH
+                    && booking.getPaymentStatus() != BookingPaymentStatus.PAID
+                    && booking.getPaymentStatus() != BookingPaymentStatus.CANCELLED) {
+                booking.setPaymentStatus(BookingPaymentStatus.PAID);
+                booking.setPaidAt(LocalDateTime.now());
             }
         }
         auditTrailService.record(
@@ -586,12 +576,49 @@ public class BookingServiceLayer {
         booking.setPaymentStatus(status);
         booking.setPaymentGatewayRef(gatewayRef);
         booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        // Paid by card => mark as paid immediately AND award loyalty points right away,
+        // without waiting for the appointment to be completed.
+        if (status == BookingPaymentStatus.PAID) {
+            awardPointsForBooking(booking);
+        }
         auditTrailService.record(
                 null,
                 booking.getCustomer(),
                 "PAYMENT_CALLBACK_RECEIVED",
                 beforeValue,
                 bookingAuditValue(booking));
+    }
+
+    /**
+     * Awards loyalty points for a booking, if not already awarded. Shared by the
+     * completion flow (COMPLETED status) and the card-payment flow (paid via card).
+     * Guarded by earnedPoints so points are never awarded twice for the same booking.
+     */
+    private void awardPointsForBooking(Booking booking) {
+        if (booking.getEarnedPoints() != null && booking.getEarnedPoints() > 0) {
+            return; // already awarded
+        }
+
+        int points = booking.getSubtotalAmount()
+                .divide(BigDecimal.valueOf(pointsAmountUnit), 0, RoundingMode.DOWN)
+                .intValue();
+
+        // Double points if booking includes the 850K service (Chăm Sóc Toàn Diện)
+        boolean has850KService = booking.getServices().stream()
+                .anyMatch(bs -> bs.getPrice().compareTo(new BigDecimal("850000")) == 0);
+        if (has850KService) {
+            points = points * 2;
+        }
+
+        booking.setEarnedPoints(points);
+        if (points > 0) {
+            loyaltyService.earnPoints(
+                    booking.getCustomer(),
+                    booking.getFinalAmount(),
+                    points,
+                    "Earned points from booking #" + booking.getId(),
+                    booking);
+        }
     }
 
     @Transactional

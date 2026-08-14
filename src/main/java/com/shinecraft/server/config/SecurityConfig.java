@@ -56,6 +56,10 @@ public class SecurityConfig {
                                 "/api/payment/momo/return", "/api/payment/momo/ipn").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/vehicle-brands/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/services/active", "/api/service-categories/active").permitAll()
+                        // Ảnh/tài liệu tải lên được phục vụ tĩnh — trình duyệt không
+                        // gửi Authorization header với <img>/<a> nên phải permitAll
+                        // nếu không mọi ảnh (xe, minh chứng) đều trả 403.
+                        .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/vehicle-access-requests")
                         .hasAuthority("ROLE_ADMIN")
