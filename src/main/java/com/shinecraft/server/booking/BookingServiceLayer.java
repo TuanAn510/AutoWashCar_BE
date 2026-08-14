@@ -49,7 +49,6 @@ public class BookingServiceLayer {
     private static final int DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
     private static final int MINIMUM_LEAD_TIME_MINUTES = 30;
     private static final int SHOP_CONCURRENT_CAPACITY = 2;
-    private static final int MAX_ACTIVE_BOOKINGS_PER_VEHICLE = 2;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
@@ -153,7 +152,6 @@ public class BookingServiceLayer {
         }
         int reservationDurationMinutes = totalDuration(bookedServices);
         validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
-        validateVehicleBookingLimit(vehicle, null);
         validateVehicleNoOverlap(vehicle, request.scheduledAt(), reservationDurationMinutes, null);
         validateShopCapacity(request.scheduledAt(), reservationDurationMinutes, null);
 
@@ -846,9 +844,6 @@ public class BookingServiceLayer {
         if (effectiveCapacity < 1) {
             return "NO_STAFF";
         }
-        if (enforceVehicleRules && activeVehicleBookings.size() >= MAX_ACTIVE_BOOKINGS_PER_VEHICLE) {
-            return "VEHICLE_BOOKING_LIMIT";
-        }
         if (enforceVehicleRules && overlapsAny(slot, slotEndAt, activeVehicleBookings)) {
             return "VEHICLE_OVERLAP";
         }
@@ -862,18 +857,6 @@ public class BookingServiceLayer {
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
         if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Booking duration must end by 17:00");
-        }
-    }
-
-    private void validateVehicleBookingLimit(Vehicle vehicle, Long ignoredBookingId) {
-        long activeVehicleBookings = bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES)
-                .stream()
-                .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
-                .count();
-        if (activeVehicleBookings >= MAX_ACTIVE_BOOKINGS_PER_VEHICLE) {
-            throw new ApiException(
-                    HttpStatus.CONFLICT,
-                    "A vehicle can only have up to 2 active appointments");
         }
     }
 

@@ -277,7 +277,7 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createRejectsWhenVehicleAlreadyHasTwoActiveAppointments() {
+    void createAllowsSameVehicleWithMoreThanTwoNonOverlappingActiveAppointments() {
         LocalDate date = LocalDate.now().plusDays(1);
         Vehicle vehicle = new Vehicle();
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
@@ -288,12 +288,12 @@ class BookingServiceLayerTest {
                         BookingStatus.IN_QUEUE,
                         BookingStatus.IN_PROGRESS)))
                 .thenReturn(List.of(
-                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 30),
-                        bookingAt(date, LocalTime.of(11, 0), BookingStatus.CONFIRMED, 30)));
+                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30),
+                        bookingAt(date, LocalTime.of(12, 0), BookingStatus.CONFIRMED, 45),
+                        bookingAt(date, LocalTime.of(15, 0), BookingStatus.IN_QUEUE, 30)));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(13, 0))))
-                .isInstanceOf(ApiException.class)
-                .hasMessage("A vehicle can only have up to 2 active appointments");
+        assertThat(bookingService.create(requestAt(date.atTime(16, 0)))).isNotNull();
     }
 
     @Test
