@@ -49,6 +49,24 @@ public class VehicleAccessRequest extends BaseEntity {
     @Column(nullable = false, length = 20)
     private VehicleAccessRequestStatus status = VehicleAccessRequestStatus.PENDING;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 40)
+    private VehicleAccessRequestType requestType = VehicleAccessRequestType.ACCESS_REQUEST;
+
+    @Column(length = 80)
+    private String suggestedBrandName;
+
+    @Column(length = 80)
+    private String suggestedModelName;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "brand_id")
+    private VehicleBrand brandRef;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "model_id")
+    private VehicleModel modelRef;
+
     @Column(columnDefinition = "NVARCHAR(MAX)")
     private String reviewNote;
 

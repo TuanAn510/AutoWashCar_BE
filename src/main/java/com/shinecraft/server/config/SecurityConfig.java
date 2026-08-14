@@ -54,8 +54,16 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/catalog/**").permitAll()
                         .requestMatchers("/api/payment/vnpay/return", "/api/payment/vnpay/ipn",
                                 "/api/payment/momo/return", "/api/payment/momo/ipn").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/vehicle-brands/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/services/active", "/api/service-categories/active").permitAll()
                         .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/vehicle-access-requests")
+                        .hasAuthority("ROLE_ADMIN")
+                        .requestMatchers(
+                                HttpMethod.PATCH,
+                                "/api/vehicle-access-requests/*/approve",
+                                "/api/vehicle-access-requests/*/reject")
+                        .hasAuthority("ROLE_ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/dashboard/overview", "/api/reports/**")
                         .hasAuthority("ROLE_ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/appointments", "/api/service-histories")

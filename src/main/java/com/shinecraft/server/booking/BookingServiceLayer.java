@@ -102,6 +102,11 @@ public class BookingServiceLayer {
         Vehicle vehicle = vehicleRepository
                 .findByIdAndCustomer(request.vehicleId(), customer)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
+        if (vehicle.getVerificationStatus() != com.shinecraft.server.vehicle.VehicleVerificationStatus.APPROVED) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Vehicle brand/model verification must be approved before booking");
+        }
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         validateMinimumLeadTime(request.scheduledAt());
         validateBookingWindow(request.scheduledAt(), account);

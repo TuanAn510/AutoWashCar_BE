@@ -1,5 +1,8 @@
 package com.shinecraft.server.config;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import com.shinecraft.server.booking.Booking;
 import com.shinecraft.server.booking.BookingPaymentMethod;
 import com.shinecraft.server.booking.BookingPaymentStatus;
@@ -24,13 +27,22 @@ import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
+import com.shinecraft.server.vehicle.VehicleBrand;
+import com.shinecraft.server.vehicle.VehicleBrandRepository;
+import com.shinecraft.server.vehicle.VehicleModel;
+import com.shinecraft.server.vehicle.VehicleModelRepository;
 import com.shinecraft.server.vehicle.VehicleRepository;
+import com.shinecraft.server.vehicle.VehicleVerificationStatus;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -44,7 +56,10 @@ public class DataSeeder implements CommandLineRunner {
     private final CarWashServiceRepository serviceRepository;
     private final RewardRepository rewardRepository;
     private final VehicleRepository vehicleRepository;
+    private final VehicleBrandRepository vehicleBrandRepository;
+    private final VehicleModelRepository vehicleModelRepository;
     private final BookingRepository bookingRepository;
+    private final ObjectMapper objectMapper;
     private final PasswordEncoder passwordEncoder;
     private final String adminPhone;
     private final String adminPassword;
@@ -65,6 +80,8 @@ public class DataSeeder implements CommandLineRunner {
             CarWashServiceRepository serviceRepository,
             RewardRepository rewardRepository,
             VehicleRepository vehicleRepository,
+            VehicleBrandRepository vehicleBrandRepository,
+            VehicleModelRepository vehicleModelRepository,
             BookingRepository bookingRepository,
             PasswordEncoder passwordEncoder,
             @Value("${app.admin.seed-phone}") String adminPhone,
@@ -84,7 +101,10 @@ public class DataSeeder implements CommandLineRunner {
         this.serviceRepository = serviceRepository;
         this.rewardRepository = rewardRepository;
         this.vehicleRepository = vehicleRepository;
+        this.vehicleBrandRepository = vehicleBrandRepository;
+        this.vehicleModelRepository = vehicleModelRepository;
         this.bookingRepository = bookingRepository;
+        this.objectMapper = new ObjectMapper();
         this.passwordEncoder = passwordEncoder;
         this.adminPhone = adminPhone;
         this.adminPassword = adminPassword;
@@ -104,6 +124,7 @@ public class DataSeeder implements CommandLineRunner {
         seedTiers();
         seedCustomers();
         seedCatalog();
+        seedVehicleCatalog();
         seedRewards();
         seedStaffDemoData();
     }
@@ -223,6 +244,67 @@ public class DataSeeder implements CommandLineRunner {
         rewardRepository.save(freeWash);
     }
 
+    private void seedVehicleCatalog() {
+        try {
+            Map<String, List<String>> catalog = objectMapper.readValue(
+                    new ClassPathResource("vehicle-catalog.json").getInputStream(),
+                    new TypeReference<>() {});
+            syncVehicleCatalog(catalog);
+            catalog.forEach((brandName, modelNames) ->
+                    createVehicleBrand(brandName, modelNames.toArray(String[]::new)));
+        } catch (Exception exception) {
+            createVehicleBrand("Toyota", "Vios", "Camry");
+            createVehicleBrand("Honda", "City", "Civic");
+            createVehicleBrand("Mazda", "CX-5", "Mazda3");
+            createVehicleBrand("VinFast", "VF 8", "VF 9");
+        }
+    }
+
+    private void syncVehicleCatalog(Map<String, List<String>> catalog) {
+        Set<String> allowedBrands = catalog.keySet().stream()
+                .map(this::normalizeCatalogName)
+                .collect(java.util.stream.Collectors.toSet());
+        vehicleBrandRepository.findAll().forEach(brand -> {
+            boolean brandAllowed = allowedBrands.contains(normalizeCatalogName(brand.getName()));
+            brand.setActive(brandAllowed);
+
+            Set<String> allowedModels = new HashSet<>(catalog.getOrDefault(brand.getName(), List.of()).stream()
+                    .map(this::normalizeCatalogName)
+                    .toList());
+            vehicleModelRepository.findByBrandIdOrderByNameAsc(brand.getId()).forEach(model -> {
+                model.setActive(brandAllowed && allowedModels.contains(normalizeCatalogName(model.getName())));
+                vehicleModelRepository.save(model);
+            });
+            vehicleBrandRepository.save(brand);
+        });
+    }
+
+    private void createVehicleBrand(String brandName, String... modelNames) {
+        VehicleBrand brand = vehicleBrandRepository.findByNameIgnoreCase(brandName).orElseGet(() -> {
+            VehicleBrand created = new VehicleBrand();
+            created.setName(brandName);
+            return vehicleBrandRepository.save(created);
+        });
+        brand.setActive(true);
+        vehicleBrandRepository.save(brand);
+        for (String modelName : modelNames) {
+            VehicleModel existing = vehicleModelRepository.findByBrandIdAndNameIgnoreCase(brand.getId(), modelName).orElse(null);
+            if (existing != null) {
+                existing.setActive(true);
+                vehicleModelRepository.save(existing);
+                continue;
+            }
+            VehicleModel model = new VehicleModel();
+            model.setBrand(brand);
+            model.setName(modelName);
+            vehicleModelRepository.save(model);
+        }
+    }
+
+    private String normalizeCatalogName(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
     private void seedStaffDemoData() {
         if (!staffDemoDataEnabled) {
             return;
@@ -292,6 +374,13 @@ public class DataSeeder implements CommandLineRunner {
         vehicle.setModel(model);
         vehicle.setColor(color);
         vehicle.setManufactureYear(manufactureYear);
+        vehicle.setVerificationStatus(VehicleVerificationStatus.APPROVED);
+        vehicleBrandRepository.findByNameIgnoreCase(brand).ifPresent(catalogBrand -> {
+            vehicle.setBrandRef(catalogBrand);
+            vehicleModelRepository
+                    .findByBrandIdAndNameIgnoreCase(catalogBrand.getId(), model)
+                    .ifPresent(vehicle::setModelRef);
+        });
         return vehicleRepository.save(vehicle);
     }
 
