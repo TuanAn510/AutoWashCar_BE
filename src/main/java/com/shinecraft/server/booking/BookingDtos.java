@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -73,7 +74,8 @@ public final class BookingDtos {
             String paymentId,
             String method,
             BigDecimal amount,
-            LocalDateTime expiresAt) {}
+            LocalDateTime expiresAt,
+            String qrCodeUrl) {}
 
     public record UpdatePaymentStatusRequest(String paymentStatus, String paymentMethod) {
         public BookingPaymentStatus resolvedPaymentStatus() {
@@ -91,7 +93,24 @@ public final class BookingDtos {
         }
     }
 
-    public record AssignStaffRequest(@NotNull Long staffId) {}
+    public record AssignStaffRequest(Long staffId, List<Long> staffIds) {
+        public AssignStaffRequest(Long staffId) {
+            this(staffId, null);
+        }
+
+        public List<Long> resolvedStaffIds() {
+            LinkedHashSet<Long> ids = new LinkedHashSet<>();
+            if (staffIds != null) {
+                staffIds.stream()
+                        .filter(id -> id != null)
+                        .forEach(ids::add);
+            }
+            if (staffId != null) {
+                ids.add(staffId);
+            }
+            return List.copyOf(ids);
+        }
+    }
 
     public record RescheduleRequest(@NotNull @Future LocalDateTime scheduledAt) {}
 
@@ -175,6 +194,7 @@ public final class BookingDtos {
             AppointmentUser customerId,
             AppointmentVehicle vehicleId,
             Object assignedStaffId,
+            List<AppointmentUser> assignedStaffIds,
             Object cancelledBy,
             List<AppointmentServiceSnapshot> services,
             LocalDateTime scheduledAt,
@@ -209,11 +229,8 @@ public final class BookingDtos {
                             booking.getVehicle().getLicensePlate(),
                             booking.getVehicle().getManufactureYear(),
                             "sedan"),
-                    booking.getAssignedStaff() == null ? null : new AppointmentUser(
-                            String.valueOf(booking.getAssignedStaff().getId()),
-                            booking.getAssignedStaff().getFullName(),
-                            booking.getAssignedStaff().getPhone(),
-                            toFrontendRole(booking.getAssignedStaff().getRole())),
+                    primaryAssignedStaff(booking),
+                    assignedStaffs(booking),
                     null,
                     booking.getServices().stream()
                             .map(service -> new AppointmentServiceSnapshot(
@@ -241,6 +258,25 @@ public final class BookingDtos {
                     booking.getEarnedPoints() != null && booking.getEarnedPoints() > 0,
                     booking.getCreatedAt(),
                     booking.getUpdatedAt());
+        }
+
+        private static AppointmentUser primaryAssignedStaff(Booking booking) {
+            return booking.getAssignedStaff() == null ? null : fromUser(booking.getAssignedStaff());
+        }
+
+        private static List<AppointmentUser> assignedStaffs(Booking booking) {
+            return java.util.stream.Stream.of(booking.getAssignedStaff(), booking.getSecondaryAssignedStaff())
+                    .filter(user -> user != null)
+                    .map(AppointmentResponse::fromUser)
+                    .toList();
+        }
+
+        private static AppointmentUser fromUser(com.shinecraft.server.user.User user) {
+            return new AppointmentUser(
+                    String.valueOf(user.getId()),
+                    user.getFullName(),
+                    user.getPhone(),
+                    toFrontendRole(user.getRole()));
         }
     }
 

@@ -48,6 +48,10 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "assigned_staff_id")
     private User assignedStaff;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "secondary_assigned_staff_id")
+    private User secondaryAssignedStaff;
+
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
 
@@ -79,6 +83,9 @@ public class Booking extends BaseEntity {
     private BookingPaymentStatus paymentStatus = BookingPaymentStatus.UNPAID;
 
     private LocalDateTime paidAt;
+
+    @Column(length = 100)
+    private String paymentGatewayRef;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")

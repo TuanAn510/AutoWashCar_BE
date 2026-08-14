@@ -11,6 +11,7 @@ import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
 import com.shinecraft.server.loyalty.RewardType;
+import com.shinecraft.server.payment.VnPayService;
 import com.shinecraft.server.promotion.DiscountType;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
@@ -44,6 +45,8 @@ public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
     private static final int SLOT_MINUTES = 30;
+    private static final int SHOP_CONCURRENT_CAPACITY = 2;
+    private static final int MAX_ACTIVE_BOOKINGS_PER_VEHICLE = 2;
     private static final List<BookingStatus> OCCUPIED_STATUSES =
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
@@ -62,6 +65,7 @@ public class BookingServiceLayer {
     private final AuthService authService;
     private final UserRepository userRepository;
     private final AuditTrailService auditTrailService;
+    private final VnPayService vnPayService;
     private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
@@ -75,6 +79,7 @@ public class BookingServiceLayer {
             AuthService authService,
             UserRepository userRepository,
             AuditTrailService auditTrailService,
+            VnPayService vnPayService,
             @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
@@ -86,6 +91,7 @@ public class BookingServiceLayer {
         this.authService = authService;
         this.userRepository = userRepository;
         this.auditTrailService = auditTrailService;
+        this.vnPayService = vnPayService;
         this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
     }
@@ -104,7 +110,7 @@ public class BookingServiceLayer {
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         validateMinimumLeadTime(request.scheduledAt());
         validateBookingWindow(request.scheduledAt(), account);
-        validateBookableSlot(request.scheduledAt());
+        validateBookableStartTime(request.scheduledAt());
 
         List<Long> requestedServiceIds = request.resolvedServiceIds();
         if (requestedServiceIds.size() != 1) {
@@ -144,7 +150,9 @@ public class BookingServiceLayer {
         }
         int reservationDurationMinutes = totalDuration(bookedServices);
         validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
-        validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes);
+        validateVehicleBookingLimit(vehicle, null);
+        validateVehicleNoOverlap(vehicle, request.scheduledAt(), reservationDurationMinutes, null);
+        validateShopCapacity(request.scheduledAt(), reservationDurationMinutes, null);
 
         BigDecimal subtotal = selectedServices.stream()
                 .map(CarWashService::getPrice)
@@ -244,7 +252,7 @@ public class BookingServiceLayer {
         if (staff.getRole() == UserRole.ROLE_ADMIN) {
             bookings = bookingRepository.findAllByOrderByScheduledAtDesc();
         } else {
-            bookings = bookingRepository.findByAssignedStaffOrderByScheduledAtDesc(staff);
+            bookings = bookingRepository.findByAssignedStaffOrSecondaryAssignedStaffOrderByScheduledAtDesc(staff, staff);
         }
         return filterAndPaginateBookings(bookings, params);
     }
@@ -267,9 +275,7 @@ public class BookingServiceLayer {
             stream = stream.filter(booking -> matchesStatus(booking, params.status()));
         }
         if (params.staffId() != null && !params.staffId().isBlank()) {
-            stream = stream.filter(booking ->
-                    booking.getAssignedStaff() != null
-                            && String.valueOf(booking.getAssignedStaff().getId()).equals(params.staffId()));
+            stream = stream.filter(booking -> isAssignedToStaff(booking, params.staffId()));
         }
         if (params.dateFrom() != null && !params.dateFrom().isBlank()) {
             LocalDateTime dateFrom = LocalDateTime.parse(params.dateFrom());
@@ -387,24 +393,47 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
-    public BookingDtos.AvailabilityResponse availability(LocalDate date) {
+    public BookingDtos.AvailabilityResponse availability(
+            LocalDate date, Long vehicleId, Long serviceId, Long rewardRedemptionId) {
         User customer = authService.currentUser();
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         int bookingWindowDays = account.getMembershipTier() == null ? 7 : account.getMembershipTier().getBookingWindowDays();
+        Vehicle vehicle = vehicleId == null
+                ? null
+                : vehicleRepository
+                        .findByIdAndCustomer(vehicleId, customer)
+                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
+        List<CarWashService> requestedServices = resolveAvailabilityServices(serviceId, rewardRedemptionId, customer);
+        int reservationDurationMinutes = requestedServices.isEmpty() ? SLOT_MINUTES : totalDuration(requestedServices);
         List<Booking> activeBookings = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(date.atStartOfDay(), date.plusDays(1).atStartOfDay())
                 .stream()
                 .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
                 .toList();
+        List<Booking> activeVehicleBookings = vehicle == null
+                ? List.of()
+                : bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
+        int effectiveCapacity = effectiveShopCapacity();
 
         List<BookingDtos.SlotResponse> slots = Stream.iterate(date.atTime(OPEN_TIME), time -> time.plusMinutes(SLOT_MINUTES))
                 .limit(slotCount())
                 .map(slot -> {
-                    String reason = slotReason(slot, bookingWindowDays, activeBookings);
+                    String reason = slotReason(
+                            slot,
+                            bookingWindowDays,
+                            activeBookings,
+                            activeVehicleBookings,
+                            reservationDurationMinutes,
+                            effectiveCapacity,
+                            vehicle != null);
                     return new BookingDtos.SlotResponse(slot, reason == null, reason);
                 })
                 .toList();
         return new BookingDtos.AvailabilityResponse(date.toString(), bookingWindowDays, slots);
+    }
+
+    public BookingDtos.AvailabilityResponse availability(LocalDate date) {
+        return availability(date, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -495,7 +524,7 @@ public class BookingServiceLayer {
     }
 
     @Transactional
-    public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request) {
+    public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request, String clientIp) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
         requireCanCreatePayment(actor, booking);
@@ -508,8 +537,21 @@ public class BookingServiceLayer {
         booking.setPaymentStatus(BookingPaymentStatus.PENDING);
         booking.setPaidAt(null);
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
-        String paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
-        String paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+
+        String paymentUrl;
+        String paymentId;
+        String qrCodeUrl = null;
+
+        if (method == BookingPaymentMethod.VNPAY) {
+            paymentUrl = vnPayService.createPaymentUrl(booking, clientIp);
+            paymentId = extractTxnRefFromUrl(paymentUrl);
+            booking.setPaymentGatewayRef(paymentId);
+        } else {
+            // CASH
+            paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
+            paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+        }
+
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -521,7 +563,29 @@ public class BookingServiceLayer {
                 paymentId,
                 method.name().toLowerCase(java.util.Locale.ROOT),
                 booking.getFinalAmount(),
-                expiresAt);
+                expiresAt,
+                qrCodeUrl);
+    }
+
+    @Transactional
+    public void confirmPaymentInternal(
+            Long bookingId, BookingPaymentStatus status, BookingPaymentMethod method, String gatewayRef) {
+        Booking booking = findBooking(bookingId);
+        // Only update if not already PAID (prevent duplicate IPN + return)
+        if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            return;
+        }
+        String beforeValue = bookingAuditValue(booking);
+        booking.setPaymentMethod(method);
+        booking.setPaymentStatus(status);
+        booking.setPaymentGatewayRef(gatewayRef);
+        booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        auditTrailService.record(
+                null,
+                booking.getCustomer(),
+                "PAYMENT_CALLBACK_RECEIVED",
+                beforeValue,
+                bookingAuditValue(booking));
     }
 
     @Transactional
@@ -555,11 +619,9 @@ public class BookingServiceLayer {
         User actor = authService.currentUser();
         requireAdmin(actor);
         String beforeValue = bookingAuditValue(booking);
-        User staff = userRepository
-                .findById(request.staffId())
-                .filter(user -> user.isActive() && user.getRole() == UserRole.ROLE_STAFF)
-                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Assigned staff is not available"));
-        booking.setAssignedStaff(staff);
+        List<User> staffs = resolveAssignableStaffs(request);
+        booking.setAssignedStaff(staffs.get(0));
+        booking.setSecondaryAssignedStaff(staffs.size() > 1 ? staffs.get(1) : null);
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -582,7 +644,8 @@ public class BookingServiceLayer {
         validateBookableStartTime(request.scheduledAt());
         int reservationDurationMinutes = totalDuration(booking);
         validateBookingEndTime(request.scheduledAt(), reservationDurationMinutes);
-        validateNoOverlappingBooking(request.scheduledAt(), reservationDurationMinutes, booking.getId());
+        validateVehicleNoOverlap(booking.getVehicle(), request.scheduledAt(), reservationDurationMinutes, booking.getId());
+        validateShopCapacity(request.scheduledAt(), reservationDurationMinutes, booking.getId());
         booking.setScheduledAt(request.scheduledAt());
         auditTrailService.record(
                 actor,
@@ -610,7 +673,7 @@ public class BookingServiceLayer {
     private void requireCanViewBooking(User actor, Booking booking) {
         if (actor.getRole() == UserRole.ROLE_ADMIN
                 || sameUser(actor, booking.getCustomer())
-                || sameUser(actor, booking.getAssignedStaff())) {
+                || isAssignedStaff(actor, booking)) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to access this appointment");
@@ -620,7 +683,7 @@ public class BookingServiceLayer {
         if (actor.getRole() == UserRole.ROLE_ADMIN) {
             return;
         }
-        if (actor.getRole() == UserRole.ROLE_STAFF && sameUser(actor, booking.getAssignedStaff())) {
+        if (actor.getRole() == UserRole.ROLE_STAFF && isAssignedStaff(actor, booking)) {
             if (requestedStatus == BookingStatus.CONFIRMED
                     || requestedStatus == BookingStatus.IN_QUEUE
                     || requestedStatus == BookingStatus.IN_PROGRESS
@@ -639,14 +702,14 @@ public class BookingServiceLayer {
     private void requireCanCreatePayment(User actor, Booking booking) {
         if (actor.getRole() == UserRole.ROLE_ADMIN
                 || sameUser(actor, booking.getCustomer())
-                || sameUser(actor, booking.getAssignedStaff())) {
+                || isAssignedStaff(actor, booking)) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to create payment for this appointment");
     }
 
     private void requireCanUpdatePayment(User actor, Booking booking) {
-        if (actor.getRole() == UserRole.ROLE_ADMIN || sameUser(actor, booking.getAssignedStaff())) {
+        if (actor.getRole() == UserRole.ROLE_ADMIN || isAssignedStaff(actor, booking)) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment payment");
@@ -660,6 +723,10 @@ public class BookingServiceLayer {
             return first.getId().equals(second.getId());
         }
         return first == second;
+    }
+
+    private boolean isAssignedStaff(User actor, Booking booking) {
+        return sameUser(actor, booking.getAssignedStaff()) || sameUser(actor, booking.getSecondaryAssignedStaff());
     }
 
     private void restoreCancellationResources(Booking booking) {
@@ -745,29 +812,42 @@ public class BookingServiceLayer {
         }
     }
 
-    private void validateBookableSlot(LocalDateTime scheduledAt) {
-        validateBookableStartTime(scheduledAt);
-        if (bookingRepository.existsByScheduledAtAndStatusIn(scheduledAt, OCCUPIED_STATUSES)) {
-            throw new ApiException(HttpStatus.CONFLICT, "This booking slot is already reserved");
-        }
-    }
-
     private void validateBookableStartTime(LocalDateTime scheduledAt) {
         if (!isBookableStartTime(scheduledAt.toLocalTime())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Booking start time must be between 08:00 and 17:00 with minute precision");
         }
     }
 
-    private String slotReason(LocalDateTime slot, int bookingWindowDays, List<Booking> activeBookings) {
+    private String slotReason(
+            LocalDateTime slot,
+            int bookingWindowDays,
+            List<Booking> activeBookings,
+            List<Booking> activeVehicleBookings,
+            int reservationDurationMinutes,
+            int effectiveCapacity,
+            boolean enforceVehicleRules) {
         LocalDateTime now = LocalDateTime.now();
+        LocalDateTime slotEndAt = endAt(slot, reservationDurationMinutes);
         if (!slot.isAfter(now)) {
             return "PAST";
         }
         if (slot.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
         }
-        if (activeBookings.stream().anyMatch(booking -> overlaps(slot, endAt(slot, SLOT_MINUTES), booking.getScheduledAt(), endAt(booking)))) {
-            return "BOOKED";
+        if (slotEndAt.isAfter(slot.toLocalDate().atTime(CLOSE_TIME))) {
+            return "OUT_OF_BUSINESS_HOURS";
+        }
+        if (effectiveCapacity < 1) {
+            return "NO_STAFF";
+        }
+        if (enforceVehicleRules && activeVehicleBookings.size() >= MAX_ACTIVE_BOOKINGS_PER_VEHICLE) {
+            return "VEHICLE_BOOKING_LIMIT";
+        }
+        if (enforceVehicleRules && overlapsAny(slot, slotEndAt, activeVehicleBookings)) {
+            return "VEHICLE_OVERLAP";
+        }
+        if (overlappingCount(slot, slotEndAt, activeBookings) >= effectiveCapacity) {
+            return "CAPACITY_FULL";
         }
         return null;
     }
@@ -779,22 +859,47 @@ public class BookingServiceLayer {
         }
     }
 
-    private void validateNoOverlappingBooking(LocalDateTime scheduledAt, int reservationDurationMinutes) {
-        validateNoOverlappingBooking(scheduledAt, reservationDurationMinutes, null);
+    private void validateVehicleBookingLimit(Vehicle vehicle, Long ignoredBookingId) {
+        long activeVehicleBookings = bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES)
+                .stream()
+                .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
+                .count();
+        if (activeVehicleBookings >= MAX_ACTIVE_BOOKINGS_PER_VEHICLE) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "A vehicle can only have up to 2 active appointments");
+        }
     }
 
-    private void validateNoOverlappingBooking(
+    private void validateVehicleNoOverlap(
+            Vehicle vehicle, LocalDateTime scheduledAt, int reservationDurationMinutes, Long ignoredBookingId) {
+        LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
+        boolean overlaps = bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES)
+                .stream()
+                .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
+                .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
+        if (overlaps) {
+            throw new ApiException(HttpStatus.CONFLICT, "This vehicle already has an appointment in that time range");
+        }
+    }
+
+    private void validateShopCapacity(
             LocalDateTime scheduledAt, int reservationDurationMinutes, Long ignoredBookingId) {
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
-        boolean overlaps = bookingRepository
+        int effectiveCapacity = effectiveShopCapacity();
+        if (effectiveCapacity < 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "No active staff is available for booking");
+        }
+        long overlappingBookings = bookingRepository
                 .findByScheduledAtBetweenOrderByScheduledAtAsc(
                         scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
                 .stream()
                 .filter(existing -> ignoredBookingId == null || !ignoredBookingId.equals(existing.getId()))
                 .filter(existing -> OCCUPIED_STATUSES.contains(existing.getStatus()))
-                .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
-        if (overlaps) {
-            throw new ApiException(HttpStatus.CONFLICT, "This booking slot overlaps an existing booking");
+                .filter(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)))
+                .count();
+        if (overlappingBookings >= effectiveCapacity) {
+            throw new ApiException(HttpStatus.CONFLICT, "Booking capacity is full for this time range");
         }
     }
 
@@ -804,6 +909,32 @@ public class BookingServiceLayer {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
     }
 
+    private boolean isAssignedToStaff(Booking booking, String staffId) {
+        return Stream.of(booking.getAssignedStaff(), booking.getSecondaryAssignedStaff())
+                .filter(staff -> staff != null && staff.getId() != null)
+                .anyMatch(staff -> String.valueOf(staff.getId()).equals(staffId));
+    }
+
+    private List<User> resolveAssignableStaffs(BookingDtos.AssignStaffRequest request) {
+        List<Long> staffIds = request == null ? List.of() : request.resolvedStaffIds();
+        if (staffIds.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "At least one staff must be selected");
+        }
+        if (staffIds.size() > 2) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "A booking can have at most 2 assigned staff");
+        }
+
+        List<User> staffs = new ArrayList<>();
+        for (Long staffId : staffIds) {
+            User staff = userRepository
+                    .findById(staffId)
+                    .filter(user -> user.isActive() && user.getRole() == UserRole.ROLE_STAFF)
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Assigned staff is not available"));
+            staffs.add(staff);
+        }
+        return staffs;
+    }
+
     private String bookingAuditValue(Booking booking) {
         return auditTrailService.bookingValue(
                 booking.getId(),
@@ -811,6 +942,7 @@ public class BookingServiceLayer {
                 booking.getPaymentStatus().name(),
                 booking.getPaymentMethod().name(),
                 booking.getAssignedStaff() == null ? null : booking.getAssignedStaff().getId(),
+                booking.getSecondaryAssignedStaff() == null ? null : booking.getSecondaryAssignedStaff().getId(),
                 booking.getScheduledAt() == null ? null : booking.getScheduledAt().toString(),
                 booking.getCheckInAt() == null ? null : booking.getCheckInAt().toString(),
                 booking.getCompletedAt() == null ? null : booking.getCompletedAt().toString());
@@ -829,6 +961,16 @@ public class BookingServiceLayer {
         return startAt.isBefore(existingEndAt) && existingStartAt.isBefore(endAt);
     }
 
+    private boolean overlapsAny(LocalDateTime startAt, LocalDateTime endAt, List<Booking> bookings) {
+        return bookings.stream().anyMatch(booking -> overlaps(startAt, endAt, booking.getScheduledAt(), endAt(booking)));
+    }
+
+    private long overlappingCount(LocalDateTime startAt, LocalDateTime endAt, List<Booking> bookings) {
+        return bookings.stream()
+                .filter(booking -> overlaps(startAt, endAt, booking.getScheduledAt(), endAt(booking)))
+                .count();
+    }
+
     private LocalDateTime endAt(LocalDateTime startAt, int durationMinutes) {
         return startAt.plusMinutes(durationMinutes);
     }
@@ -843,6 +985,36 @@ public class BookingServiceLayer {
 
     private LocalDateTime endAt(Booking booking) {
         return endAt(booking.getScheduledAt(), totalDuration(booking));
+    }
+
+    private List<CarWashService> resolveAvailabilityServices(
+            Long serviceId, Long rewardRedemptionId, User customer) {
+        List<CarWashService> services = new ArrayList<>();
+        if (serviceId != null) {
+            CarWashService service = serviceRepository
+                    .findById(serviceId)
+                    .filter(CarWashService::isActive)
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Selected service is invalid"));
+            services.add(service);
+        }
+        if (rewardRedemptionId != null) {
+            RewardRedemption redemption = redemptionRepository
+                    .findByIdAndCustomerAndStatus(rewardRedemptionId, customer, RewardRedemptionStatus.AVAILABLE)
+                    .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Reward redemption is not available"));
+            Reward reward = redemption.getReward();
+            if (reward.getRewardType() == RewardType.ADD_ON) {
+                CarWashService addOn = requireActiveAddOnService(reward);
+                if (services.stream().noneMatch(service -> service.getId().equals(addOn.getId()))) {
+                    services.add(addOn);
+                }
+            }
+        }
+        return services;
+    }
+
+    private int effectiveShopCapacity() {
+        int activeStaffCount = userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF).size();
+        return Math.min(SHOP_CONCURRENT_CAPACITY, activeStaffCount);
     }
 
     private boolean isBookableStartTime(LocalTime time) {
@@ -905,5 +1077,14 @@ public class BookingServiceLayer {
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {
         return amount.multiply(percent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+    }
+
+    private String extractTxnRefFromUrl(String url) {
+        if (url == null || !url.contains("vnp_TxnRef=")) return null;
+        String[] parts = url.split("vnp_TxnRef=");
+        if (parts.length < 2) return null;
+        String txnRef = parts[1];
+        int ampIndex = txnRef.indexOf("&");
+        return ampIndex > 0 ? txnRef.substring(0, ampIndex) : txnRef;
     }
 }
