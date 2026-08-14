@@ -13,7 +13,10 @@ import java.util.List;
 import java.util.Locale;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -25,6 +28,7 @@ public class VehicleService {
     private final VehicleBrandRepository brandRepository;
     private final VehicleModelRepository modelRepository;
     private final VehicleAccessRequestRepository accessRequestRepository;
+    private final TransactionTemplate requiresNewTx;
 
     public VehicleService(VehicleRepository vehicleRepository,
                            VehicleImageRepository vehicleImageRepository,
@@ -32,7 +36,8 @@ public class VehicleService {
                            AuthService authService,
             VehicleBrandRepository brandRepository,
             VehicleModelRepository modelRepository,
-            VehicleAccessRequestRepository accessRequestRepository) {
+            VehicleAccessRequestRepository accessRequestRepository,
+            PlatformTransactionManager platformTransactionManager) {
         this.vehicleRepository = vehicleRepository;
         this.vehicleImageRepository = vehicleImageRepository;
         this.fileStorageService = fileStorageService;
@@ -40,6 +45,8 @@ public class VehicleService {
         this.brandRepository = brandRepository;
         this.modelRepository = modelRepository;
         this.accessRequestRepository = accessRequestRepository;
+        this.requiresNewTx = new TransactionTemplate(platformTransactionManager);
+        this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Transactional(readOnly = true)
@@ -134,22 +141,23 @@ public class VehicleService {
             return VehicleDtos.VehicleResponse.from(saved);
         }
 
-        // OTHER or suggested custom brand/model present → PENDING + verification request
+        // OTHER or suggested custom brand/model present → defer addition until
+        // admin approves. No vehicle is created; the draft is carried by a
+        // BRAND_MODEL_VERIFICATION request. The request is committed in its own
+        // transaction so it survives the exception that signals the FE.
         String brandText = hasText(request.suggestedBrandName()) ? request.suggestedBrandName().trim() : trim(request.brand());
         String modelText = hasText(request.suggestedModelName()) ? request.suggestedModelName().trim() : trim(request.model());
-        vehicle.setBrand(brandText);
-        vehicle.setModel(modelText);
-        if (brand != null) {
-            vehicle.setBrandRef(brand);
-        }
-        if (model != null) {
-            vehicle.setModelRef(model);
-        }
-        vehicle.setVerificationStatus(VehicleVerificationStatus.PENDING);
-        Vehicle saved = vehicleRepository.save(vehicle);
-        saveImages(saved, files);
-        createVerificationRequest(saved, request, brand, model);
-        return VehicleDtos.VehicleResponse.from(saved);
+        requiresNewTx.executeWithoutResult(status ->
+                createBrandModelDraftRequest(
+                        plate,
+                        normalizeCarType(request.resolvedCarType()),
+                        request.resolvedYear(),
+                        brandText,
+                        modelText,
+                        brand,
+                        model));
+        throw new ApiException(
+                HttpStatus.CONFLICT, "Vehicle brand/model verification required", "BRAND_MODEL_VERIFICATION_REQUIRED");
     }
 
     @Transactional
@@ -317,6 +325,32 @@ public class VehicleService {
                 hasText(request.suggestedModelName()) ? request.suggestedModelName().trim() : trim(request.model()));
         accessRequest.setBrandRef(brand);
         accessRequest.setModelRef(model);
+        accessRequestRepository.save(accessRequest);
+    }
+
+    /** Creates a BRAND_MODEL_VERIFICATION request that carries the draft of a
+     *  vehicle the customer submitted with a custom (OTHER) brand/model. The
+     *  actual vehicle is only created when an admin approves it. */
+    private void createBrandModelDraftRequest(
+            String licensePlate,
+            String carType,
+            Integer manufactureYear,
+            String brandName,
+            String modelName,
+            VehicleBrand brand,
+            VehicleModel model) {
+        VehicleAccessRequest accessRequest = new VehicleAccessRequest();
+        accessRequest.setRequester(authService.currentUser());
+        accessRequest.setLicensePlate(licensePlate);
+        accessRequest.setRelationship("BRAND_MODEL_VERIFICATION");
+        accessRequest.setNote("Vehicle brand/model verification request");
+        accessRequest.setRequestType(VehicleAccessRequestType.BRAND_MODEL_VERIFICATION);
+        accessRequest.setSuggestedBrandName(brandName);
+        accessRequest.setSuggestedModelName(modelName);
+        accessRequest.setBrandRef(brand);
+        accessRequest.setModelRef(model);
+        accessRequest.setCarType(carType);
+        accessRequest.setManufactureYear(manufactureYear);
         accessRequestRepository.save(accessRequest);
     }
 

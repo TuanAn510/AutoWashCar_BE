@@ -67,6 +67,11 @@ public class VehicleAccessRequest extends BaseEntity {
     @JoinColumn(name = "model_id")
     private VehicleModel modelRef;
 
+    @Column(length = 20)
+    private String carType;
+
+    private Integer manufactureYear;
+
     @Column(columnDefinition = "NVARCHAR(MAX)")
     private String reviewNote;
 
