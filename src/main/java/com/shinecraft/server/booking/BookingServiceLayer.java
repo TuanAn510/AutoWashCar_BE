@@ -443,6 +443,25 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
+    public BookingDtos.CandidateAvailabilityResponse checkAvailability(
+            LocalDateTime scheduledAt, Long vehicleId, Long serviceId, Long rewardRedemptionId) {
+        User customer = authService.currentUser();
+        LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
+        Vehicle vehicle = vehicleRepository
+                .findByIdAndCustomer(vehicleId, customer)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer vehicle not found"));
+        List<CarWashService> services = resolveAvailabilityServices(serviceId, rewardRedemptionId, customer);
+        if (services.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Exactly one primary service must be selected");
+        }
+
+        int reservationDurationMinutes = totalDuration(services);
+        LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
+        String reason = candidateAvailabilityReason(scheduledAt, endAt, account, vehicle);
+        return new BookingDtos.CandidateAvailabilityResponse(scheduledAt, endAt, reason == null, reason);
+    }
+
+    @Transactional(readOnly = true)
     public List<BookingDtos.QueueItemResponse> priorityQueue() {
         LocalDateTime now = LocalDateTime.now();
         List<Booking> bookings = bookingRepository.findByStatusInOrderByScheduledAtAsc(
@@ -877,6 +896,43 @@ public class BookingServiceLayer {
             return "VEHICLE_OVERLAP";
         }
         if (wouldExceedShopCapacity(slot, slotEndAt, activeBookings, effectiveCapacity)) {
+            return "CAPACITY_FULL";
+        }
+        return null;
+    }
+
+    private String candidateAvailabilityReason(
+            LocalDateTime scheduledAt, LocalDateTime endAt, LoyaltyAccount account, Vehicle vehicle) {
+        LocalDateTime now = LocalDateTime.now();
+        if (scheduledAt.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
+            return "LEAD_TIME";
+        }
+        int bookingWindowDays = account.getMembershipTier() == null ? 7 : account.getMembershipTier().getBookingWindowDays();
+        if (scheduledAt.isAfter(now.plusDays(bookingWindowDays))) {
+            return "OUT_OF_TIER_WINDOW";
+        }
+        if (!isBookableStartTime(scheduledAt.toLocalTime())) {
+            return "OUTSIDE_HOURS";
+        }
+        if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
+            return "END_AFTER_CLOSE";
+        }
+        int effectiveCapacity = effectiveShopCapacity();
+        if (effectiveCapacity < 1) {
+            return "NO_STAFF";
+        }
+        List<Booking> vehicleBookings =
+                bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
+        if (overlapsAny(scheduledAt, endAt, vehicleBookings)) {
+            return "VEHICLE_OVERLAP";
+        }
+        List<Booking> activeBookings = bookingRepository
+                .findByScheduledAtBetweenOrderByScheduledAtAsc(
+                        scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
+                .stream()
+                .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
+                .toList();
+        if (wouldExceedShopCapacity(scheduledAt, endAt, activeBookings, effectiveCapacity)) {
             return "CAPACITY_FULL";
         }
         return null;

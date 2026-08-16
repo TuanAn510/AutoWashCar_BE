@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -212,6 +213,91 @@ class BookingServiceLayerTest {
 
         assertSlot(response, date, LocalTime.of(9, 30), true, null);
         assertSlot(response, date, LocalTime.of(10, 0), true, null);
+    }
+
+    @Test
+    void candidateAvailabilityChecksExactArbitraryMinuteIntervalWithoutPersistence() {
+        LocalDateTime scheduledAt = LocalDate.now().plusDays(1).atTime(9, 17);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(45)));
+
+        BookingDtos.CandidateAvailabilityResponse response =
+                bookingService.checkAvailability(scheduledAt, 1L, 1L, null);
+
+        assertThat(response.startAt()).isEqualTo(scheduledAt);
+        assertThat(response.endAt()).isEqualTo(scheduledAt.plusMinutes(45));
+        assertThat(response.available()).isTrue();
+        assertThat(response.reason()).isNull();
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @Test
+    void candidateAvailabilityReportsVehicleOverlapAndCapacityFull() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(45)));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
+
+        assertThat(bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null).reason())
+                .isEqualTo("VEHICLE_OVERLAP");
+
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of());
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45),
+                        bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 45)));
+
+        assertThat(bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null).reason())
+                .isEqualTo("CAPACITY_FULL");
+    }
+
+    @Test
+    void candidateAvailabilityReportsNoStaffLeadTimeAndOutsideHours() {
+        LocalDateTime tomorrowAtNine = LocalDate.now().plusDays(1).atTime(9, 0);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(30)));
+        when(userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF)).thenReturn(List.of());
+
+        assertThat(bookingService.checkAvailability(tomorrowAtNine, 1L, 1L, null).reason()).isEqualTo("NO_STAFF");
+        assertThat(bookingService.checkAvailability(LocalDateTime.now().plusMinutes(20), 1L, 1L, null).reason())
+                .isEqualTo("LEAD_TIME");
+        assertThat(bookingService.checkAvailability(tomorrowAtNine.toLocalDate().atTime(7, 59), 1L, 1L, null).reason())
+                .isEqualTo("OUTSIDE_HOURS");
+        assertThat(bookingService.checkAvailability(tomorrowAtNine.toLocalDate().atTime(17, 0), 1L, 1L, null).reason())
+                .isEqualTo("OUTSIDE_HOURS");
+    }
+
+    @Test
+    void candidateAvailabilityUsesExactAddOnDurationAndIgnoresTerminalBookings() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        CarWashService primary = serviceWithDuration(45);
+        primary.setId(1L);
+        CarWashService addOn = serviceWithDuration(15);
+        addOn.setId(2L);
+        Reward reward = new Reward();
+        reward.setRewardType(com.shinecraft.server.loyalty.RewardType.ADD_ON);
+        reward.setAddOnService(addOn);
+        RewardRedemption redemption = new RewardRedemption();
+        redemption.setCustomer(customer);
+        redemption.setReward(reward);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(new Vehicle()));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(primary));
+        when(redemptionRepository.findByIdAndCustomerAndStatus(10L, customer, RewardRedemptionStatus.AVAILABLE))
+                .thenReturn(java.util.Optional.of(redemption));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        bookingAt(date, LocalTime.of(16, 0), BookingStatus.CANCELLED, 60),
+                        bookingAt(date, LocalTime.of(16, 0), BookingStatus.COMPLETED, 60)));
+
+        BookingDtos.CandidateAvailabilityResponse atClosingBoundary =
+                bookingService.checkAvailability(date.atTime(16, 0), 1L, 1L, 10L);
+        assertThat(atClosingBoundary.endAt()).isEqualTo(date.atTime(17, 0));
+        assertThat(atClosingBoundary.available()).isTrue();
+        assertThat(bookingService.checkAvailability(date.atTime(16, 1), 1L, 1L, 10L).reason())
+                .isEqualTo("END_AFTER_CLOSE");
     }
 
     @Test

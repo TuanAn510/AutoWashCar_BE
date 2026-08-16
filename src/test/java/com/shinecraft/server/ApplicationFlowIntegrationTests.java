@@ -4,6 +4,7 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -433,6 +434,26 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.scheduledAt", is(scheduledAt.format(JSON_DATE_TIME))));
+    }
+
+    @Test
+    void customerCanCheckAnExactManualBookingCandidate() throws Exception {
+        CustomerContext customer = registerCustomer();
+        CarWashService service = firstActiveService();
+        LocalDateTime scheduledAt = nextSlot().withMinute(17);
+
+        mockMvc.perform(get("/api/bookings/availability/check")
+                        .header("Authorization", bearer(customer.token()))
+                        .param("scheduledAt", scheduledAt.format(JSON_DATE_TIME))
+                        .param("vehicleId", customer.vehicle().getId().toString())
+                        .param("serviceId", service.getId().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.data.startAt", is(scheduledAt.format(JSON_DATE_TIME))))
+                .andExpect(jsonPath(
+                        "$.data.endAt", is(scheduledAt.plusMinutes(service.getDurationMinutes()).format(JSON_DATE_TIME))))
+                .andExpect(jsonPath("$.data.available", is(true)))
+                .andExpect(jsonPath("$.data.reason", nullValue()));
     }
 
     @Test
