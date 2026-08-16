@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -165,6 +166,17 @@ public class BookingController {
         return ApiResponse.ok(
                 "Booking availability retrieved successfully",
                 bookingService.availability(date, vehicleId, serviceId, rewardRedemptionId));
+    }
+
+    @GetMapping("/api/bookings/availability/check")
+    ApiResponse<BookingDtos.CandidateAvailabilityResponse> checkAvailability(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime scheduledAt,
+            @RequestParam Long vehicleId,
+            @RequestParam Long serviceId,
+            @RequestParam(required = false) Long rewardRedemptionId) {
+        return ApiResponse.ok(
+                "Booking candidate availability retrieved successfully",
+                bookingService.checkAvailability(scheduledAt, vehicleId, serviceId, rewardRedemptionId));
     }
 
     @GetMapping("/api/admin/bookings/today")
