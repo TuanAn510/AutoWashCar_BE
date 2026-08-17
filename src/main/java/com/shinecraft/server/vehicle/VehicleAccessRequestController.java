@@ -60,6 +60,12 @@ public class VehicleAccessRequestController {
     ApiResponse<VehicleAccessRequestResponse> create(@ModelAttribute VehicleAccessRequestForm request) {
         User requester = authService.currentUser();
         String licensePlate = LicensePlateNormalizer.normalize(request.getLicensePlate());
+        if (requestRepository.existsByRequesterIdAndLicensePlateAndStatus(
+                requester.getId(), licensePlate, VehicleAccessRequestStatus.PENDING)) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "Xe này đã có yêu cầu xác minh đang chờ xử lý.");
+        }
         VehicleAccessRequest accessRequest = new VehicleAccessRequest();
         accessRequest.setRequester(requester);
         accessRequest.setLicensePlate(licensePlate);

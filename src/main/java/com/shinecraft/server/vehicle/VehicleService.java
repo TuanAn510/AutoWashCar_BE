@@ -339,8 +339,14 @@ public class VehicleService {
             String modelName,
             VehicleBrand brand,
             VehicleModel model) {
+        User requester = authService.currentUser();
+        if (accessRequestRepository.existsByRequesterIdAndLicensePlateAndStatus(
+                requester.getId(), licensePlate, VehicleAccessRequestStatus.PENDING)) {
+            return;
+        }
+
         VehicleAccessRequest accessRequest = new VehicleAccessRequest();
-        accessRequest.setRequester(authService.currentUser());
+        accessRequest.setRequester(requester);
         accessRequest.setLicensePlate(licensePlate);
         accessRequest.setRelationship("BRAND_MODEL_VERIFICATION");
         accessRequest.setNote("Vehicle brand/model verification request");
