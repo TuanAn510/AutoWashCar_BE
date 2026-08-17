@@ -50,6 +50,9 @@ public class AuthService {
         if (userRepository.existsByPhone(phone)) {
             throw new ApiException(HttpStatus.CONFLICT, "Phone number already exists");
         }
+        // Biển số trùng với một xe ACTIVE khác: từ chối (giữ hành vi cũ). Việc
+        // chuyển quyền biển số đi qua luồng yêu cầu xác minh của admin — không
+        // tự khóa xe cũ ngay tại lúc đăng ký.
         if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(licensePlate)) {
             throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
         }

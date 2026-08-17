@@ -29,13 +29,15 @@ public class VehicleController {
     }
 
     @GetMapping("/my")
-    ApiResponse<List<VehicleDtos.VehicleResponse>> myVehicles() {
-        return ApiResponse.ok("Vehicles retrieved successfully", vehicleService.myVehicles());
+    ApiResponse<List<VehicleDtos.VehicleResponse>> myVehicles(
+            @RequestParam(required = false, defaultValue = "false") boolean includeInactive) {
+        return ApiResponse.ok("Vehicles retrieved successfully", vehicleService.myVehicles(includeInactive));
     }
 
     @GetMapping("/me")
-    ApiResponse<List<VehicleDtos.VehicleResponse>> myVehiclesForFrontend() {
-        return ApiResponse.ok("Vehicles retrieved successfully", vehicleService.myVehicles());
+    ApiResponse<List<VehicleDtos.VehicleResponse>> myVehiclesForFrontend(
+            @RequestParam(required = false, defaultValue = "false") boolean includeInactive) {
+        return ApiResponse.ok("Vehicles retrieved successfully", vehicleService.myVehicles(includeInactive));
     }
 
     @GetMapping

@@ -50,9 +50,15 @@ public class VehicleService {
     }
 
     @Transactional(readOnly = true)
-    public List<VehicleDtos.VehicleResponse> myVehicles() {
+    public List<VehicleDtos.VehicleResponse> myVehicles(boolean includeInactive) {
         User customer = authService.currentUser();
-        return vehicleRepository.findByCustomerAndIsActiveTrue(customer).stream()
+        // Mặc định chỉ trả xe active (dùng cho đặt lịch, filter). Khi includeInactive
+        // được bật (trang "Xe của tôi"), trả kèm các xe đã bị KHÓA (biển chuyển quyền)
+        // để chủ cũ vẫn thấy xe của mình được đánh dấu là đã khóa — lịch sử giữ nguyên.
+        return (includeInactive
+                        ? vehicleRepository.findByCustomerOrderByIsActiveDescIdAsc(customer) // active trước, vẫn có cả xe khóa
+                        : vehicleRepository.findByCustomerAndIsActiveTrue(customer))
+                .stream()
                 .map(VehicleDtos.VehicleResponse::from)
                 .toList();
     }
@@ -107,9 +113,21 @@ public class VehicleService {
     public VehicleDtos.VehicleResponse create(VehicleDtos.VehicleRequest request, List<MultipartFile> files) {
         requireForCreate(request);
         String plate = LicensePlateNormalizer.normalize(request.licensePlate());
-        if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate)) {
-            throw new ApiException(HttpStatus.CONFLICT, "License plate already exists", "VEHICLE_VERIFICATION_REQUIRED");
+        ResolvedBrandModel resolved = resolveBrandModel(request);
+        boolean directCreate = resolved.catalogSelected() || resolved.legacyPlainText();
+
+        // Trong luồng tạo xe trực tiếp (chọn hãng/dòng có sẵn trong catalog hoặc nhập
+        // hãng/dòng plaintext): nếu biển số đang bị một xe ACTIVE khác giữ ⇒ KHÔNG
+        // khóa/không tạo xe ngay. Trả VEHICLE_VERIFICATION_REQUIRED để FE chuyển sang
+        // gửi yêu cầu xác minh cho admin; chỉ khi admin duyệt thì xe cũ mới bị khóa
+        // (giữ lịch sử) và biển được cấp cho chủ mới. Luồng OTHER (chọn "Khác" hãng/
+        // dòng, phải admin duyệt trước khi tạo xe) để nguyên — đã tự đi qua admin.
+        boolean plateTaken = directCreate
+                && vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate);
+        if (plateTaken) {
+            throw new ApiException(HttpStatus.CONFLICT, "Vehicle verification required", "VEHICLE_VERIFICATION_REQUIRED");
         }
+
         Vehicle vehicle = new Vehicle();
         vehicle.setCustomer(authService.currentUser());
         vehicle.setLicensePlate(plate);
@@ -117,7 +135,6 @@ public class VehicleService {
         vehicle.setManufactureYear(request.resolvedYear());
         vehicle.setCarType(normalizeCarType(request.resolvedCarType()));
         vehicle.setOwnershipStartAt(LocalDateTime.now());
-        ResolvedBrandModel resolved = resolveBrandModel(request);
         VehicleBrand brand = resolved.brand();
         VehicleModel model = resolved.model();
 
@@ -177,8 +194,13 @@ public class VehicleService {
 
         if (request.licensePlate() != null && !request.licensePlate().isBlank()) {
             String plate = LicensePlateNormalizer.normalize(request.licensePlate());
-            if (vehicleRepository.existsByLicensePlateAndIsActiveTrueAndIdNot(plate, id)) {
-                throw new ApiException(HttpStatus.CONFLICT, "License plate already exists");
+            // Đổi sang biển đang bị một xe ACTIVE KHÁC giữ ⇒ yêu cầu xác minh admin,
+            // không tự khóa/chuyển quyền ngay. Chính mình thì được phép đổi biển.
+            boolean takenByOther = vehicleRepository
+                    .findAllByLicensePlateAndIsActiveTrue(plate).stream()
+                    .anyMatch(holder -> !holder.getId().equals(id));
+            if (takenByOther) {
+                throw new ApiException(HttpStatus.CONFLICT, "Vehicle verification required", "VEHICLE_VERIFICATION_REQUIRED");
             }
             vehicle.setLicensePlate(plate);
         }

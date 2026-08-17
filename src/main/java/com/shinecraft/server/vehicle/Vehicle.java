@@ -83,4 +83,9 @@ public class Vehicle extends BaseEntity {
     private LocalDateTime ownershipStartAt = LocalDateTime.now();
 
     private LocalDateTime ownershipEndAt;
+
+    /** Id của xe mới đã thay thế (thay thế vị trí giữ biển số) và gây khóa xe này.
+     *  Khác null nghĩa là xe này bị bất hoạt do biển số được gán cho chủ mới,
+     *  lịch sử hoạt động của xe vẫn được giữ lại. */
+    private Long replacedByVehicleId;
 }
