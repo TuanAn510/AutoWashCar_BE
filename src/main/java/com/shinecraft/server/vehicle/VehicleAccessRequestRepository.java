@@ -25,5 +25,8 @@ public interface VehicleAccessRequestRepository extends JpaRepository<VehicleAcc
     boolean existsByRequesterIdAndLicensePlateAndRequestTypeAndStatus(
             Long requesterId, String licensePlate, VehicleAccessRequestType requestType, VehicleAccessRequestStatus status);
 
+    boolean existsByRequesterIdAndLicensePlateAndStatus(
+            Long requesterId, String licensePlate, VehicleAccessRequestStatus status);
+
     List<VehicleAccessRequest> findByVehicleIdAndStatus(Long vehicleId, VehicleAccessRequestStatus status);
 }
