@@ -140,6 +140,7 @@ public final class VehicleDtos {
             String carType,
             List<ImageResponse> images,
             LocalDateTime deletedAt,
+            Long replacedByVehicleId,
             LocalDateTime createdAt,
             LocalDateTime updatedAt,
             String verificationStatus,
@@ -161,6 +162,7 @@ public final class VehicleDtos {
                             .map(ImageResponse::from)
                             .toList(),
                     vehicle.isActive() ? null : vehicle.getOwnershipEndAt(),
+                    vehicle.getReplacedByVehicleId(),
                     vehicle.getCreatedAt(),
                     vehicle.getUpdatedAt(),
                     vehicle.getVerificationStatus() == null

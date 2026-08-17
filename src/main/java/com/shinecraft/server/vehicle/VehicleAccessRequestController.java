@@ -190,6 +190,8 @@ public class VehicleAccessRequestController {
             softDeleteDuplicate(oldDuplicate);
             Vehicle keeper = buildKeeper(accessRequest, oldDuplicate);
             vehicleRepository.saveAndFlush(keeper);
+            oldDuplicate.setReplacedByVehicleId(keeper.getId());
+            vehicleRepository.save(oldDuplicate);
             accessRequest.setVehicle(keeper);
         }
 
@@ -305,6 +307,21 @@ public class VehicleAccessRequestController {
                 vehicle.setManufactureYear(accessRequest.getManufactureYear());
                 vehicle.setOwnershipStartAt(LocalDateTime.now());
             }
+            // Nếu biển số đang bị một (những) xe ACTIVE khác giữ ⇒ KHÓA chúng (giữ
+            // nguyên lịch sử) để chủ mới được gán biển. Flush KHÓA TRƯỚC khi chèn
+            // xe active mới cùng biển để không vỡ filtered unique index.
+            List<Vehicle> superseded = accessRequest.getLicensePlate() == null
+                    ? List.of()
+                    : vehicleRepository.findAllByLicensePlateAndIsActiveTrue(accessRequest.getLicensePlate());
+            boolean hadLocked = !superseded.isEmpty();
+            if (hadLocked) {
+                LocalDateTime now = LocalDateTime.now();
+                for (Vehicle v : superseded) {
+                    v.setActive(false);
+                    v.setOwnershipEndAt(now);
+                }
+                vehicleRepository.saveAllAndFlush(superseded);
+            }
             VehicleBrand brand = resolveOrCreateBrand(accessRequest, vehicle);
             VehicleModel model = resolveOrCreateModel(accessRequest, vehicle, brand);
             if (brand != null) {
@@ -321,9 +338,15 @@ public class VehicleAccessRequestController {
             vehicle.setVerificationNote(accessRequest.getReviewNote());
             // Persist the new vehicle BEFORE linking it to the managed request, otherwise
             // the next query auto-flushes and fails on the transient reference.
-            vehicleRepository.save(vehicle);
+            Vehicle saved = vehicleRepository.save(vehicle);
+            if (hadLocked) {
+                for (Vehicle v : superseded) {
+                    v.setReplacedByVehicleId(saved.getId());
+                }
+                vehicleRepository.saveAll(superseded);
+            }
             if (deferred) {
-                accessRequest.setVehicle(vehicle);
+                accessRequest.setVehicle(saved);
             }
         } else {
             if (vehicle == null) {

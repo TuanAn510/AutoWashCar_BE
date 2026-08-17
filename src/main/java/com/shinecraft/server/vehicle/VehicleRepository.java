@@ -14,6 +14,10 @@ public interface VehicleRepository extends JpaRepository<Vehicle, Long> {
 
     Optional<Vehicle> findByLicensePlateAndIsActiveTrue(String licensePlate);
 
+    /** Mọi xe ACTIVE đang giữ biển số (tối đa 1 do filtered unique index), dùng
+     *  khi cần KHÓA xe cũ và gán chủ mới cho biển số. */
+    List<Vehicle> findAllByLicensePlateAndIsActiveTrue(String licensePlate);
+
     boolean existsByLicensePlate(String licensePlate);
 
     boolean existsByLicensePlateAndIsActiveTrue(String licensePlate);
