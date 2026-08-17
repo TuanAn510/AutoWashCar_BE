@@ -90,20 +90,82 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void availabilityUsesFifteenMinuteSuggestionsAndKeepsThirtyMinuteFallbackDuration() {
+    void availabilityUsesFiveMinuteSuggestionsAndStopsAtTheExactLatestStartForDefaultDuration() {
         LocalDate date = LocalDate.now().plusDays(1);
 
         BookingDtos.AvailabilityResponse response = bookingService.availability(date);
 
-        assertThat(response.slots()).hasSize(36);
+        assertThat(response.slots()).hasSize(103);
         assertThat(response.slots().stream().limit(5).map(BookingDtos.SlotResponse::startAt).toList())
                 .containsExactly(
                         date.atTime(8, 0),
+                        date.atTime(8, 5),
+                        date.atTime(8, 10),
                         date.atTime(8, 15),
-                        date.atTime(8, 30),
-                        date.atTime(8, 45),
-                        date.atTime(9, 0));
-        assertSlot(response, date, LocalTime.of(16, 45), false, "OUT_OF_BUSINESS_HOURS");
+                        date.atTime(8, 20));
+        assertSlot(response, date, LocalTime.of(16, 30), true, null);
+        assertThat(response.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 35)));
+    }
+
+    @Test
+    void availabilityUsesExactServiceDurationForDynamicLatestStarts() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(45)));
+        BookingDtos.AvailabilityResponse fortyFiveMinutes = bookingService.availability(date, 1L, 1L, null);
+        assertSlot(fortyFiveMinutes, date, LocalTime.of(16, 15), true, null);
+        assertThat(fortyFiveMinutes.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 20)));
+
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(90)));
+        BookingDtos.AvailabilityResponse ninetyMinutes = bookingService.availability(date, 1L, 1L, null);
+        assertSlot(ninetyMinutes, date, LocalTime.of(15, 30), true, null);
+        assertThat(ninetyMinutes.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(15, 35)));
+    }
+
+    @Test
+    void availabilityAddsRewardAddOnDurationWhenCalculatingLatestStart() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        CarWashService primary = serviceWithDuration(45);
+        primary.setId(1L);
+        CarWashService addOn = serviceWithDuration(15);
+        addOn.setId(2L);
+        Reward reward = new Reward();
+        reward.setRewardType(com.shinecraft.server.loyalty.RewardType.ADD_ON);
+        reward.setAddOnService(addOn);
+        RewardRedemption redemption = new RewardRedemption();
+        redemption.setCustomer(customer);
+        redemption.setReward(reward);
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(primary));
+        when(redemptionRepository.findByIdAndCustomerAndStatus(10L, customer, RewardRedemptionStatus.AVAILABLE))
+                .thenReturn(java.util.Optional.of(redemption));
+
+        BookingDtos.AvailabilityResponse response = bookingService.availability(date, 1L, 1L, 10L);
+
+        assertSlot(response, date, LocalTime.of(16, 0), true, null);
+        assertThat(response.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 5)));
+    }
+
+    @Test
+    void availabilityReturnsOneVehicleLevelReasonForAnUnfinishedVehicleBooking() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(30)));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, List.of(
+                        BookingStatus.PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS)))
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(14, 0), BookingStatus.CONFIRMED, 30)));
+
+        BookingDtos.AvailabilityResponse response = bookingService.availability(date, 1L, 1L, null);
+
+        assertThat(response.vehicleAvailabilityReason()).isEqualTo("VEHICLE_UNFINISHED_BOOKING");
+        assertThat(response.slots()).isEmpty();
     }
 
     @Test
@@ -391,7 +453,7 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createAllowsSameVehicleWithMoreThanTwoNonOverlappingActiveAppointments() {
+    void createRejectsAnyUnfinishedBookingForTheSameVehicleRegardlessOfRequestedTime() {
         LocalDate date = LocalDate.now().plusDays(1);
         Vehicle vehicle = new Vehicle();
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
@@ -401,13 +463,11 @@ class BookingServiceLayerTest {
                         BookingStatus.CONFIRMED,
                         BookingStatus.IN_QUEUE,
                         BookingStatus.IN_PROGRESS)))
-                .thenReturn(List.of(
-                        bookingAt(date, LocalTime.of(8, 0), BookingStatus.PENDING, 30),
-                        bookingAt(date, LocalTime.of(12, 0), BookingStatus.CONFIRMED, 45),
-                        bookingAt(date, LocalTime.of(15, 0), BookingStatus.IN_QUEUE, 30)));
-        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(14, 0), BookingStatus.CONFIRMED, 45)));
 
-        assertThat(bookingService.create(requestAt(date.atTime(16, 0)))).isNotNull();
+        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(9, 0))))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("This vehicle already has an unfinished appointment");
     }
 
     @Test
@@ -531,7 +591,7 @@ class BookingServiceLayerTest {
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This vehicle already has an appointment in that time range");
+                .hasMessage("This vehicle already has an unfinished appointment");
     }
 
     @Test
@@ -550,11 +610,11 @@ class BookingServiceLayerTest {
 
         assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This vehicle already has an appointment in that time range");
+                .hasMessage("This vehicle already has an unfinished appointment");
     }
 
     @Test
-    void createAllowsSameVehicleStartExactlyWhenAnExistingBookingEnds() {
+    void createRejectsAnInQueueBookingForTheSameVehicleEvenAtABoundary() {
         LocalDate date = LocalDate.now().plusDays(1);
         LocalDateTime scheduledAt = date.atTime(9, 47);
         Vehicle vehicle = new Vehicle();
@@ -565,11 +625,11 @@ class BookingServiceLayerTest {
                         BookingStatus.CONFIRMED,
                         BookingStatus.IN_QUEUE,
                         BookingStatus.IN_PROGRESS)))
-                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 17), BookingStatus.PENDING, 30)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
-        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 17), BookingStatus.IN_QUEUE, 30)));
 
-        assertThat(bookingService.create(requestAt(scheduledAt))).isNotNull();
+        assertThatThrownBy(() -> bookingService.create(requestAt(scheduledAt)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("This vehicle already has an unfinished appointment");
     }
 
     @Test
@@ -599,7 +659,7 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void createUsesExactDurationForSameVehicleOverlapAndAllowsBoundaryTouch() {
+    void createRejectsAnInProgressBookingForTheSameVehicleEvenAtABoundary() {
         LocalDate date = LocalDate.now().plusDays(1);
         Vehicle vehicle = new Vehicle();
         when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
@@ -609,14 +669,11 @@ class BookingServiceLayerTest {
                         BookingStatus.CONFIRMED,
                         BookingStatus.IN_QUEUE,
                         BookingStatus.IN_PROGRESS)))
-                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
-        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
-        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.IN_PROGRESS, 45)));
 
-        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(9, 44))))
+        assertThatThrownBy(() -> bookingService.create(requestAt(date.atTime(9, 45))))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("This vehicle already has an appointment in that time range");
-        assertThat(bookingService.create(requestAt(date.atTime(9, 45)))).isNotNull();
+                .hasMessage("This vehicle already has an unfinished appointment");
     }
 
     @Test
