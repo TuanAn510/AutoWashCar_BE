@@ -64,7 +64,11 @@ public final class BookingDtos {
     public record AvailabilityResponse(String date, Integer bookingWindowDays, List<SlotResponse> slots) {}
 
     public record CandidateAvailabilityResponse(
-            LocalDateTime startAt, LocalDateTime endAt, boolean available, String reason) {}
+            LocalDateTime startAt,
+            LocalDateTime endAt,
+            boolean available,
+            String reason,
+            LocalDateTime nearestAvailableStartAt) {}
 
     public record CreatePaymentRequest(@NotNull String method) {
         public BookingPaymentMethod resolvedMethod() {
