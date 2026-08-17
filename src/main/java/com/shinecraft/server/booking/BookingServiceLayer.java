@@ -728,6 +728,9 @@ public class BookingServiceLayer {
         if (actor.getRole() == UserRole.ROLE_CUSTOMER
                 && sameUser(actor, booking.getCustomer())
                 && requestedStatus == BookingStatus.CANCELLED) {
+            if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Lịch hẹn đã được thanh toán nên không thể hủy.");
+            }
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "You do not have permission to update this appointment status");
@@ -862,6 +865,9 @@ public class BookingServiceLayer {
             boolean enforceVehicleRules) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime slotEndAt = endAt(slot, reservationDurationMinutes);
+        if (slot.isBefore(now)) {
+            return "PAST";
+        }
         if (slot.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
             return "LEAD_TIME";
         }
@@ -899,6 +905,9 @@ public class BookingServiceLayer {
     private String candidateAvailabilityReason(
             LocalDateTime scheduledAt, LocalDateTime endAt, CandidateAvailabilityContext context) {
         LocalDateTime now = LocalDateTime.now();
+        if (scheduledAt.isBefore(now)) {
+            return "PAST";
+        }
         if (scheduledAt.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
             return "LEAD_TIME";
         }
