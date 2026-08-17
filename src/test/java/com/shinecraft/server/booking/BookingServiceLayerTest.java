@@ -228,6 +228,7 @@ class BookingServiceLayerTest {
         assertThat(response.endAt()).isEqualTo(scheduledAt.plusMinutes(45));
         assertThat(response.available()).isTrue();
         assertThat(response.reason()).isNull();
+        assertThat(response.nearestAvailableStartAt()).isNull();
         verify(bookingRepository, never()).save(any(Booking.class));
     }
 
@@ -240,8 +241,10 @@ class BookingServiceLayerTest {
         when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of(bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45)));
 
-        assertThat(bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null).reason())
-                .isEqualTo("VEHICLE_OVERLAP");
+        BookingDtos.CandidateAvailabilityResponse vehicleOverlap =
+                bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null);
+        assertThat(vehicleOverlap.reason()).isEqualTo("VEHICLE_OVERLAP");
+        assertThat(vehicleOverlap.nearestAvailableStartAt()).isEqualTo(date.atTime(9, 45));
 
         when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
                 .thenReturn(List.of());
@@ -250,8 +253,30 @@ class BookingServiceLayerTest {
                         bookingAt(date, LocalTime.of(9, 0), BookingStatus.PENDING, 45),
                         bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 45)));
 
-        assertThat(bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null).reason())
-                .isEqualTo("CAPACITY_FULL");
+        BookingDtos.CandidateAvailabilityResponse capacityFull =
+                bookingService.checkAvailability(date.atTime(9, 17), 1L, 1L, null);
+        assertThat(capacityFull.reason()).isEqualTo("CAPACITY_FULL");
+        assertThat(capacityFull.nearestAvailableStartAt()).isEqualTo(date.atTime(9, 45));
+    }
+
+    @Test
+    void candidateAvailabilityAllowsHalfOpenBoundaryAndReturnsNoNearestTimeAfterClosing() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Vehicle vehicle = new Vehicle();
+        when(vehicleRepository.findByIdAndCustomer(1L, customer)).thenReturn(java.util.Optional.of(vehicle));
+        when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(45)));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(bookingAt(date, LocalTime.of(12, 0), BookingStatus.PENDING, 45)));
+
+        BookingDtos.CandidateAvailabilityResponse boundary =
+                bookingService.checkAvailability(date.atTime(12, 45), 1L, 1L, null);
+        assertThat(boundary.available()).isTrue();
+        assertThat(boundary.nearestAvailableStartAt()).isNull();
+
+        BookingDtos.CandidateAvailabilityResponse noFit =
+                bookingService.checkAvailability(date.atTime(16, 16), 1L, 1L, null);
+        assertThat(noFit.reason()).isEqualTo("END_AFTER_CLOSE");
+        assertThat(noFit.nearestAvailableStartAt()).isNull();
     }
 
     @Test
@@ -296,8 +321,10 @@ class BookingServiceLayerTest {
                 bookingService.checkAvailability(date.atTime(16, 0), 1L, 1L, 10L);
         assertThat(atClosingBoundary.endAt()).isEqualTo(date.atTime(17, 0));
         assertThat(atClosingBoundary.available()).isTrue();
-        assertThat(bookingService.checkAvailability(date.atTime(16, 1), 1L, 1L, 10L).reason())
-                .isEqualTo("END_AFTER_CLOSE");
+        BookingDtos.CandidateAvailabilityResponse afterClosing =
+                bookingService.checkAvailability(date.atTime(16, 1), 1L, 1L, 10L);
+        assertThat(afterClosing.reason()).isEqualTo("END_AFTER_CLOSE");
+        assertThat(afterClosing.nearestAvailableStartAt()).isNull();
     }
 
     @Test

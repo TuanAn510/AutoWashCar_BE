@@ -453,7 +453,8 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath(
                         "$.data.endAt", is(scheduledAt.plusMinutes(service.getDurationMinutes()).format(JSON_DATE_TIME))))
                 .andExpect(jsonPath("$.data.available", is(true)))
-                .andExpect(jsonPath("$.data.reason", nullValue()));
+                .andExpect(jsonPath("$.data.reason", nullValue()))
+                .andExpect(jsonPath("$.data.nearestAvailableStartAt", nullValue()));
     }
 
     @Test

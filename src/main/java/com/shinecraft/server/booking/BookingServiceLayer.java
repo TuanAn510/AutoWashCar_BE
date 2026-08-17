@@ -457,8 +457,13 @@ public class BookingServiceLayer {
 
         int reservationDurationMinutes = totalDuration(services);
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
-        String reason = candidateAvailabilityReason(scheduledAt, endAt, account, vehicle);
-        return new BookingDtos.CandidateAvailabilityResponse(scheduledAt, endAt, reason == null, reason);
+        CandidateAvailabilityContext context = candidateAvailabilityContext(scheduledAt, account, vehicle);
+        String reason = candidateAvailabilityReason(scheduledAt, endAt, context);
+        LocalDateTime nearestAvailableStartAt = reason == null
+                ? null
+                : nearestAvailableStartAt(scheduledAt, reservationDurationMinutes, context);
+        return new BookingDtos.CandidateAvailabilityResponse(
+                scheduledAt, endAt, reason == null, reason, nearestAvailableStartAt);
     }
 
     @Transactional(readOnly = true)
@@ -901,13 +906,28 @@ public class BookingServiceLayer {
         return null;
     }
 
+    private CandidateAvailabilityContext candidateAvailabilityContext(
+            LocalDateTime scheduledAt, LoyaltyAccount account, Vehicle vehicle) {
+        List<Booking> vehicleBookings =
+                bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
+        List<Booking> activeBookings = bookingRepository
+                .findByScheduledAtBetweenOrderByScheduledAtAsc(
+                        scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
+                .stream()
+                .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
+                .toList();
+        return new CandidateAvailabilityContext(account, vehicleBookings, activeBookings, effectiveShopCapacity());
+    }
+
     private String candidateAvailabilityReason(
-            LocalDateTime scheduledAt, LocalDateTime endAt, LoyaltyAccount account, Vehicle vehicle) {
+            LocalDateTime scheduledAt, LocalDateTime endAt, CandidateAvailabilityContext context) {
         LocalDateTime now = LocalDateTime.now();
         if (scheduledAt.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
             return "LEAD_TIME";
         }
-        int bookingWindowDays = account.getMembershipTier() == null ? 7 : account.getMembershipTier().getBookingWindowDays();
+        int bookingWindowDays = context.account().getMembershipTier() == null
+                ? 7
+                : context.account().getMembershipTier().getBookingWindowDays();
         if (scheduledAt.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
         }
@@ -917,26 +937,36 @@ public class BookingServiceLayer {
         if (endAt.isAfter(scheduledAt.toLocalDate().atTime(CLOSE_TIME))) {
             return "END_AFTER_CLOSE";
         }
-        int effectiveCapacity = effectiveShopCapacity();
-        if (effectiveCapacity < 1) {
+        if (context.effectiveCapacity() < 1) {
             return "NO_STAFF";
         }
-        List<Booking> vehicleBookings =
-                bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
-        if (overlapsAny(scheduledAt, endAt, vehicleBookings)) {
+        if (overlapsAny(scheduledAt, endAt, context.vehicleBookings())) {
             return "VEHICLE_OVERLAP";
         }
-        List<Booking> activeBookings = bookingRepository
-                .findByScheduledAtBetweenOrderByScheduledAtAsc(
-                        scheduledAt.toLocalDate().atStartOfDay(), scheduledAt.toLocalDate().plusDays(1).atStartOfDay())
-                .stream()
-                .filter(booking -> OCCUPIED_STATUSES.contains(booking.getStatus()))
-                .toList();
-        if (wouldExceedShopCapacity(scheduledAt, endAt, activeBookings, effectiveCapacity)) {
+        if (wouldExceedShopCapacity(scheduledAt, endAt, context.activeBookings(), context.effectiveCapacity())) {
             return "CAPACITY_FULL";
         }
         return null;
     }
+
+    private LocalDateTime nearestAvailableStartAt(
+            LocalDateTime requestedStartAt, int reservationDurationMinutes, CandidateAvailabilityContext context) {
+        LocalDateTime closingTime = requestedStartAt.toLocalDate().atTime(CLOSE_TIME);
+        for (LocalDateTime candidate = requestedStartAt.plusMinutes(1);
+                !endAt(candidate, reservationDurationMinutes).isAfter(closingTime);
+                candidate = candidate.plusMinutes(1)) {
+            if (candidateAvailabilityReason(candidate, endAt(candidate, reservationDurationMinutes), context) == null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private record CandidateAvailabilityContext(
+            LoyaltyAccount account,
+            List<Booking> vehicleBookings,
+            List<Booking> activeBookings,
+            int effectiveCapacity) {}
 
     private void validateBookingEndTime(LocalDateTime scheduledAt, int reservationDurationMinutes) {
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
