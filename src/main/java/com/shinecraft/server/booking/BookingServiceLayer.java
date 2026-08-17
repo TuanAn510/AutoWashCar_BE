@@ -45,7 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class BookingServiceLayer {
     private static final LocalTime OPEN_TIME = LocalTime.of(8, 0);
     private static final LocalTime CLOSE_TIME = LocalTime.of(17, 0);
-    private static final int AVAILABILITY_SUGGESTION_MINUTES = 15;
+    private static final int AVAILABILITY_SUGGESTION_MINUTES = 5;
     private static final int DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
     private static final int MINIMUM_LEAD_TIME_MINUTES = 30;
     private static final int SHOP_CONCURRENT_CAPACITY = 2;
@@ -109,6 +109,7 @@ public class BookingServiceLayer {
                     HttpStatus.BAD_REQUEST,
                     "Vehicle brand/model verification must be approved before booking");
         }
+        validateVehicleHasNoUnfinishedBooking(vehicle);
         LoyaltyAccount account = loyaltyService.getOrCreateAccount(customer);
         validateMinimumLeadTime(request.scheduledAt());
         validateBookingWindow(request.scheduledAt(), account);
@@ -416,11 +417,16 @@ public class BookingServiceLayer {
         List<Booking> activeVehicleBookings = vehicle == null
                 ? List.of()
                 : bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES);
+        if (vehicle != null && !activeVehicleBookings.isEmpty()) {
+            return new BookingDtos.AvailabilityResponse(
+                    date.toString(), bookingWindowDays, List.of(), "VEHICLE_UNFINISHED_BOOKING");
+        }
         int effectiveCapacity = effectiveShopCapacity();
+        LocalDateTime latestStartAt = date.atTime(CLOSE_TIME).minusMinutes(reservationDurationMinutes);
 
         List<BookingDtos.SlotResponse> slots = Stream.iterate(
                         date.atTime(OPEN_TIME), time -> time.plusMinutes(AVAILABILITY_SUGGESTION_MINUTES))
-                .limit(slotCount())
+                .takeWhile(slot -> !slot.isAfter(latestStartAt))
                 .map(slot -> {
                     String reason = slotReason(
                             slot,
@@ -433,7 +439,7 @@ public class BookingServiceLayer {
                     return new BookingDtos.SlotResponse(slot, reason == null, reason);
                 })
                 .toList();
-        return new BookingDtos.AvailabilityResponse(date.toString(), bookingWindowDays, slots);
+        return new BookingDtos.AvailabilityResponse(date.toString(), bookingWindowDays, slots, null);
     }
 
     public BookingDtos.AvailabilityResponse availability(LocalDate date) {
@@ -856,8 +862,8 @@ public class BookingServiceLayer {
             boolean enforceVehicleRules) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime slotEndAt = endAt(slot, reservationDurationMinutes);
-        if (!slot.isAfter(now)) {
-            return "PAST";
+        if (slot.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
+            return "LEAD_TIME";
         }
         if (slot.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
@@ -955,6 +961,12 @@ public class BookingServiceLayer {
                 .anyMatch(existing -> overlaps(scheduledAt, endAt, existing.getScheduledAt(), endAt(existing)));
         if (overlaps) {
             throw new ApiException(HttpStatus.CONFLICT, "This vehicle already has an appointment in that time range");
+        }
+    }
+
+    private void validateVehicleHasNoUnfinishedBooking(Vehicle vehicle) {
+        if (!bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES).isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "This vehicle already has an unfinished appointment");
         }
     }
 
@@ -1115,10 +1127,6 @@ public class BookingServiceLayer {
                 && time.isBefore(CLOSE_TIME)
                 && time.getSecond() == 0
                 && time.getNano() == 0;
-    }
-
-    private long slotCount() {
-        return java.time.Duration.between(OPEN_TIME, CLOSE_TIME).toMinutes() / AVAILABILITY_SUGGESTION_MINUTES;
     }
 
     private BigDecimal discountForPromotion(BigDecimal base, Promotion promotion) {
