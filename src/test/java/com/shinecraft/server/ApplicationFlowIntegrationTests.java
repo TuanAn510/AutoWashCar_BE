@@ -1224,6 +1224,35 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void paidCustomerCannotCancelPendingBookingOrRestorePromotionUsage() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Promotion promotion = createActivePromotion("PAID-CANCEL-" + SEQUENCE.getAndIncrement());
+        Long bookingId = createBooking(customer, promotion.getId());
+
+        mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "paymentStatus": "paid",
+                                  "paymentMethod": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/appointments/my/{id}/cancel", bookingId)
+                        .header("Authorization", bearer(customer.token())))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Lịch hẹn đã được thanh toán nên không thể hủy.")));
+
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(booking.getStatus().name()).isEqualTo("PENDING");
+        assertThat(booking.getPaymentStatus().name()).isEqualTo("PAID");
+        assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+    }
+
+    @Test
     void adminCanAssignStaffAndStaffCanSeeAssignedAppointment() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();

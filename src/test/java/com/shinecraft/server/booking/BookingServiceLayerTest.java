@@ -360,6 +360,8 @@ class BookingServiceLayerTest {
         assertThat(bookingService.checkAvailability(tomorrowAtNine, 1L, 1L, null).reason()).isEqualTo("NO_STAFF");
         assertThat(bookingService.checkAvailability(LocalDateTime.now().plusMinutes(20), 1L, 1L, null).reason())
                 .isEqualTo("LEAD_TIME");
+        assertThat(bookingService.checkAvailability(LocalDateTime.now().minusMinutes(1), 1L, 1L, null).reason())
+                .isEqualTo("PAST");
         assertThat(bookingService.checkAvailability(tomorrowAtNine.toLocalDate().atTime(7, 59), 1L, 1L, null).reason())
                 .isEqualTo("OUTSIDE_HOURS");
         assertThat(bookingService.checkAvailability(tomorrowAtNine.toLocalDate().atTime(17, 0), 1L, 1L, null).reason())
@@ -873,6 +875,40 @@ class BookingServiceLayerTest {
         BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.CANCELLED);
 
         assertThat(response.status()).isEqualTo(BookingStatus.CANCELLED);
+    }
+
+    @Test
+    void customerCanCancelAnUnpaidPendingBooking() {
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.updateStatus(99L, BookingStatus.CANCELLED);
+
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+    }
+
+    @Test
+    void customerCannotCancelPaidBookingBeforeCancellationResourcesAreRestored() {
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setPaymentStatus(BookingPaymentStatus.PAID);
+        Promotion promotion = new Promotion();
+        promotion.setUsedCount(1);
+        booking.setPromotion(promotion);
+        RewardRedemption redemption = usedRedemption(LocalDateTime.now().plusDays(1));
+        booking.setRewardRedemption(redemption);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Lịch hẹn đã được thanh toán nên không thể hủy.");
+
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.USED);
+        verify(promotionService, never()).restoreUsage(promotion);
     }
 
     @Test
