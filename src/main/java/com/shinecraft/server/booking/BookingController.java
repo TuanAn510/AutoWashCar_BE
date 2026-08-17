@@ -10,13 +10,16 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @Tag(name = "Bookings")
 @RestController
@@ -109,12 +112,23 @@ public class BookingController {
         return ApiResponse.ok("Appointment retrieved successfully", bookingService.appointmentDetail(id));
     }
 
-    @PatchMapping("/api/appointments/{id}/status")
+    @PatchMapping(value = "/api/appointments/{id}/status", consumes = MediaType.APPLICATION_JSON_VALUE)
     ApiResponse<BookingDtos.AppointmentResponse> updateAppointmentStatus(
             @PathVariable Long id, @Valid @RequestBody BookingDtos.UpdateStatusRequest request) {
         return ApiResponse.ok(
                 "Appointment status updated successfully",
                 bookingService.updateAppointmentStatus(id, request.resolvedStatus()));
+    }
+
+    @PatchMapping(value = "/api/appointments/{id}/status", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    ApiResponse<BookingDtos.AppointmentResponse> updateAppointmentStatusWithEvidence(
+            @PathVariable Long id,
+            @RequestPart("status") String status,
+            @RequestPart(value = "evidenceImage", required = false) MultipartFile evidenceImage) {
+        return ApiResponse.ok(
+                "Appointment status updated successfully",
+                bookingService.updateAppointmentStatusWithEvidence(
+                        id, BookingStatus.valueOf(status.trim().toUpperCase()), evidenceImage));
     }
 
     @PatchMapping("/api/appointments/my/{id}/cancel")
@@ -189,10 +203,23 @@ public class BookingController {
         return ApiResponse.ok("Priority queue retrieved successfully", bookingService.priorityQueue());
     }
 
-    @PatchMapping("/api/admin/bookings/{id}/status")
+    @PatchMapping(value = "/api/admin/bookings/{id}/status", consumes = MediaType.APPLICATION_JSON_VALUE)
     ApiResponse<BookingDtos.BookingResponse> updateStatus(
             @PathVariable Long id, @Valid @RequestBody BookingDtos.UpdateStatusRequest request) {
-        return ApiResponse.ok("Booking status updated successfully", bookingService.updateStatus(id, request.resolvedStatus()));
+        return ApiResponse.ok(
+                "Booking status updated successfully",
+                bookingService.updateStatus(id, request.resolvedStatus()));
+    }
+
+    @PatchMapping(value = "/api/admin/bookings/{id}/status", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    ApiResponse<BookingDtos.BookingResponse> updateStatusWithEvidence(
+            @PathVariable Long id,
+            @RequestPart("status") String status,
+            @RequestPart(value = "evidenceImage", required = false) MultipartFile evidenceImage) {
+        return ApiResponse.ok(
+                "Booking status updated successfully",
+                bookingService.updateStatusWithEvidence(
+                        id, BookingStatus.valueOf(status.trim().toUpperCase()), evidenceImage));
     }
 
     private BookingDtos.AppointmentStatusSummary summarizeAppointmentResponses(

@@ -14,6 +14,7 @@ import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.catalog.ServiceCategory;
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
@@ -37,6 +38,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +51,8 @@ class BookingServiceLayerTest {
     private PromotionService promotionService;
     private AuthService authService;
     private UserRepository userRepository;
+    private BookingStatusHistoryRepository statusHistoryRepository;
+    private FileStorageService fileStorageService;
     private BookingServiceLayer bookingService;
     private User customer;
     private LoyaltyAccount account;
@@ -63,8 +67,11 @@ class BookingServiceLayerTest {
         promotionService = mock(PromotionService.class);
         authService = mock(AuthService.class);
         userRepository = mock(UserRepository.class);
+        statusHistoryRepository = mock(BookingStatusHistoryRepository.class);
+        fileStorageService = mock(FileStorageService.class);
         bookingService = new BookingServiceLayer(
                 bookingRepository,
+                statusHistoryRepository,
                 vehicleRepository,
                 serviceRepository,
                 redemptionRepository,
@@ -74,6 +81,7 @@ class BookingServiceLayerTest {
                 userRepository,
                 mock(AuditTrailService.class),
                 mock(VnPayService.class),
+                fileStorageService,
                 2,
                 true,
                 10000);
@@ -87,6 +95,7 @@ class BookingServiceLayerTest {
                 .thenReturn(List.of(new User(), new User()));
         when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
+        when(fileStorageService.store(any())).thenReturn("/uploads/status-evidence.jpg");
     }
 
     @Test
@@ -753,13 +762,32 @@ class BookingServiceLayerTest {
         Booking booking = bookingWithStatus(BookingStatus.IN_PROGRESS);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
-        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.COMPLETED);
+        BookingDtos.BookingResponse response =
+                bookingService.updateStatusWithEvidence(99L, BookingStatus.COMPLETED, statusImage());
 
         assertThat(response.status()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getCompletedAt()).isNotNull();
+        assertThat(booking.getCompletionImageUrl()).isEqualTo("/uploads/status-evidence.jpg");
         assertThat(booking.getEarnedPoints()).isEqualTo(1);
         verify(loyaltyService).earnPoints(
                 customer, BigDecimal.valueOf(10000), 1, "Earned points from booking #99", booking);
+    }
+
+    @Test
+    void statusRequiresEvidenceForCheckInAndCompletion() {
+        Booking confirmed = bookingWithStatus(BookingStatus.CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(confirmed));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.IN_QUEUE))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Check-in image is required");
+
+        Booking inProgress = bookingWithStatus(BookingStatus.IN_PROGRESS);
+        when(bookingRepository.findById(100L)).thenReturn(java.util.Optional.of(inProgress));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(100L, BookingStatus.COMPLETED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Completion image is required");
     }
 
     @Test
@@ -853,10 +881,12 @@ class BookingServiceLayerTest {
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
         LocalDateTime before = LocalDateTime.now();
 
-        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.IN_QUEUE);
+        BookingDtos.BookingResponse response =
+                bookingService.updateStatusWithEvidence(99L, BookingStatus.IN_QUEUE, statusImage());
 
         assertThat(response.status()).isEqualTo(BookingStatus.IN_QUEUE);
         assertThat(booking.getCheckInAt()).isAfterOrEqualTo(before);
+        assertThat(booking.getCheckInImageUrl()).isEqualTo("/uploads/status-evidence.jpg");
     }
 
     @Test
@@ -909,10 +939,10 @@ class BookingServiceLayerTest {
         when(authService.currentUser()).thenReturn(staff);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
-        bookingService.updateStatus(99L, BookingStatus.IN_QUEUE);
+        bookingService.updateStatusWithEvidence(99L, BookingStatus.IN_QUEUE, statusImage());
         LocalDateTime checkInAt = booking.getCheckInAt();
         bookingService.updateStatus(99L, BookingStatus.IN_PROGRESS);
-        bookingService.updateStatus(99L, BookingStatus.COMPLETED);
+        bookingService.updateStatusWithEvidence(99L, BookingStatus.COMPLETED, statusImage());
 
         assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
@@ -1356,9 +1386,16 @@ class BookingServiceLayerTest {
         Booking booking = bookingWithStatus(currentStatus);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
-        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, requestedStatus);
+        BookingDtos.BookingResponse response = requestedStatus == BookingStatus.IN_QUEUE
+                || requestedStatus == BookingStatus.COMPLETED
+                        ? bookingService.updateStatusWithEvidence(99L, requestedStatus, statusImage())
+                        : bookingService.updateStatus(99L, requestedStatus);
 
         assertThat(response.status()).isEqualTo(requestedStatus);
+    }
+
+    private MockMultipartFile statusImage() {
+        return new MockMultipartFile("evidenceImage", "status.jpg", "image/jpeg", new byte[] {1, 2, 3});
     }
 
     private void assertInvalidTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {

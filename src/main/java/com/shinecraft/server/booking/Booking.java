@@ -58,6 +58,15 @@ public class Booking extends BaseEntity {
     @Column(name = "check_in_at")
     private LocalDateTime checkInAt;
 
+    @Column(name = "service_started_at")
+    private LocalDateTime serviceStartedAt;
+
+    @Column(name = "check_in_image_url", length = 500)
+    private String checkInImageUrl;
+
+    @Column(name = "completion_image_url", length = 500)
+    private String completionImageUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private BookingStatus status = BookingStatus.PENDING;

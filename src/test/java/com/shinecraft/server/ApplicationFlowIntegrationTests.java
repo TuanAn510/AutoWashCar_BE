@@ -12,6 +12,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -51,6 +52,7 @@ import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -71,6 +73,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -1416,6 +1419,16 @@ class ApplicationFlowIntegrationTests {
 
     private org.springframework.test.web.servlet.RequestBuilder statusPatch(
             String adminToken, Long bookingId, String statusValue) {
+        if (requiresStatusEvidence(statusValue)) {
+            return multipart("/api/admin/bookings/{id}/status", bookingId)
+                    .file(statusPart(statusValue))
+                    .file(statusEvidenceImage())
+                    .header("Authorization", bearer(adminToken))
+                    .with(request -> {
+                        request.setMethod("PATCH");
+                        return request;
+                    });
+        }
         return patch("/api/admin/bookings/{id}/status", bookingId)
                 .header("Authorization", bearer(adminToken))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -1429,6 +1442,16 @@ class ApplicationFlowIntegrationTests {
 
     private org.springframework.test.web.servlet.RequestBuilder appointmentStatusPatch(
             String token, Long bookingId, String statusValue) {
+        if (requiresStatusEvidence(statusValue)) {
+            return multipart("/api/appointments/{id}/status", bookingId)
+                    .file(statusPart(statusValue))
+                    .file(statusEvidenceImage())
+                    .header("Authorization", bearer(token))
+                    .with(request -> {
+                        request.setMethod("PATCH");
+                        return request;
+                    });
+        }
         return patch("/api/appointments/{id}/status", bookingId)
                 .header("Authorization", bearer(token))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -1438,6 +1461,23 @@ class ApplicationFlowIntegrationTests {
                         }
                         """
                         .formatted(statusValue));
+    }
+
+    private boolean requiresStatusEvidence(String statusValue) {
+        String normalized = statusValue == null ? "" : statusValue.trim().toUpperCase();
+        return "IN_QUEUE".equals(normalized) || "COMPLETED".equals(normalized);
+    }
+
+    private MockMultipartFile statusEvidenceImage() {
+        return new MockMultipartFile("evidenceImage", "status.jpg", "image/jpeg", new byte[] {1, 2, 3});
+    }
+
+    private MockMultipartFile statusPart(String statusValue) {
+        return new MockMultipartFile(
+                "status",
+                "",
+                MediaType.TEXT_PLAIN_VALUE,
+                statusValue.getBytes(StandardCharsets.UTF_8));
     }
 
     private String bookingJson(CustomerContext customer, Long promotionId, LocalDateTime scheduledAt) {

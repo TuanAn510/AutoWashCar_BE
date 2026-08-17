@@ -4,6 +4,7 @@ import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.Reward;
@@ -40,6 +41,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class BookingServiceLayer {
@@ -58,6 +60,7 @@ public class BookingServiceLayer {
             BookingStatus.COMPLETED, Set.of(),
             BookingStatus.CANCELLED, Set.of());
     private final BookingRepository bookingRepository;
+    private final BookingStatusHistoryRepository statusHistoryRepository;
     private final VehicleRepository vehicleRepository;
     private final CarWashServiceRepository serviceRepository;
     private final RewardRedemptionRepository redemptionRepository;
@@ -67,12 +70,14 @@ public class BookingServiceLayer {
     private final UserRepository userRepository;
     private final AuditTrailService auditTrailService;
     private final VnPayService vnPayService;
+    private final FileStorageService fileStorageService;
     private final int shopConcurrentCapacity;
     private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
     public BookingServiceLayer(
             BookingRepository bookingRepository,
+            BookingStatusHistoryRepository statusHistoryRepository,
             VehicleRepository vehicleRepository,
             CarWashServiceRepository serviceRepository,
             RewardRedemptionRepository redemptionRepository,
@@ -82,10 +87,12 @@ public class BookingServiceLayer {
             UserRepository userRepository,
             AuditTrailService auditTrailService,
             VnPayService vnPayService,
+            FileStorageService fileStorageService,
             @Value("${app.booking.shop-concurrent-capacity:2}") int shopConcurrentCapacity,
             @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
             @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
         this.bookingRepository = bookingRepository;
+        this.statusHistoryRepository = statusHistoryRepository;
         this.vehicleRepository = vehicleRepository;
         this.serviceRepository = serviceRepository;
         this.redemptionRepository = redemptionRepository;
@@ -95,6 +102,7 @@ public class BookingServiceLayer {
         this.userRepository = userRepository;
         this.auditTrailService = auditTrailService;
         this.vnPayService = vnPayService;
+        this.fileStorageService = fileStorageService;
         this.shopConcurrentCapacity = Math.max(1, shopConcurrentCapacity);
         this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
@@ -383,7 +391,9 @@ public class BookingServiceLayer {
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
         requireCanViewBooking(authService.currentUser(), booking);
-        return BookingDtos.AppointmentResponse.from(booking);
+        return BookingDtos.AppointmentResponse.from(
+                booking,
+                statusHistoryRepository.findByBookingOrderByChangedAtAscIdAsc(booking));
     }
 
     @Transactional(readOnly = true)
@@ -498,6 +508,17 @@ public class BookingServiceLayer {
 
     @Transactional
     public BookingDtos.BookingResponse updateStatus(Long bookingId, BookingStatus status) {
+        return updateStatus(bookingId, status, null, statusRequiresEvidence(status));
+    }
+
+    @Transactional
+    public BookingDtos.BookingResponse updateStatusWithEvidence(
+            Long bookingId, BookingStatus status, MultipartFile evidenceImage) {
+        return updateStatus(bookingId, status, evidenceImage, true);
+    }
+
+    private BookingDtos.BookingResponse updateStatus(
+            Long bookingId, BookingStatus status, MultipartFile evidenceImage, boolean requireEvidence) {
         Booking booking = bookingRepository
                 .findById(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
@@ -512,16 +533,32 @@ public class BookingServiceLayer {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                     "Không thể bắt đầu hoặc hoàn thành lịch hẹn trước thời gian đã lên lịch");
         }
+        String statusEvidenceUrl = null;
         if (currentStatus == BookingStatus.CONFIRMED
-                    && status == BookingStatus.IN_QUEUE
-                    && booking.getCheckInAt() == null) {
+                && status == BookingStatus.IN_QUEUE
+                && booking.getCheckInAt() == null) {
             booking.setCheckInAt(LocalDateTime.now());
+        }
+        if (status == BookingStatus.IN_QUEUE) {
+            String evidenceUrl = storeStatusEvidence(evidenceImage, requireEvidence, "Check-in image is required");
+            if (evidenceUrl != null) {
+                booking.setCheckInImageUrl(evidenceUrl);
+                statusEvidenceUrl = evidenceUrl;
+            }
+        }
+        if (status == BookingStatus.IN_PROGRESS && booking.getServiceStartedAt() == null) {
+            booking.setServiceStartedAt(LocalDateTime.now());
         }
         if (status == BookingStatus.CANCELLED) {
             restoreCancellationResources(booking);
         }
         booking.setStatus(status);
         if (status == BookingStatus.COMPLETED && booking.getCompletedAt() == null) {
+            String evidenceUrl = storeStatusEvidence(evidenceImage, requireEvidence, "Completion image is required");
+            if (evidenceUrl != null) {
+                booking.setCompletionImageUrl(evidenceUrl);
+                statusEvidenceUrl = evidenceUrl;
+            }
             booking.setCompletedAt(LocalDateTime.now());
             awardPointsForBooking(booking);
             // Cash is collected on-site by staff. When the appointment is completed,
@@ -540,12 +577,20 @@ public class BookingServiceLayer {
                 "BOOKING_STATUS_CHANGED",
                 beforeValue,
                 bookingAuditValue(booking));
+        recordStatusHistory(booking, currentStatus, status, actor, statusEvidenceUrl);
         return BookingDtos.BookingResponse.from(booking);
     }
 
     @Transactional
     public BookingDtos.AppointmentResponse updateAppointmentStatus(Long bookingId, BookingStatus status) {
         updateStatus(bookingId, status);
+        return appointmentDetail(bookingId);
+    }
+
+    @Transactional
+    public BookingDtos.AppointmentResponse updateAppointmentStatusWithEvidence(
+            Long bookingId, BookingStatus status, MultipartFile evidenceImage) {
+        updateStatusWithEvidence(bookingId, status, evidenceImage);
         return appointmentDetail(bookingId);
     }
 
@@ -725,6 +770,41 @@ public class BookingServiceLayer {
                     HttpStatus.BAD_REQUEST,
                     "Invalid booking status transition from " + currentStatus + " to " + requestedStatus);
         }
+    }
+
+    private boolean statusRequiresEvidence(BookingStatus status) {
+        return status == BookingStatus.IN_QUEUE || status == BookingStatus.COMPLETED;
+    }
+
+    private void recordStatusHistory(
+            Booking booking,
+            BookingStatus oldStatus,
+            BookingStatus newStatus,
+            User actor,
+            String evidenceImageUrl) {
+        BookingStatusHistory history = new BookingStatusHistory();
+        history.setBooking(booking);
+        history.setOldStatus(oldStatus);
+        history.setNewStatus(newStatus);
+        history.setActor(actor);
+        history.setActorRole(actor == null ? null : actor.getRole());
+        history.setChangedAt(LocalDateTime.now());
+        history.setEvidenceImageUrl(evidenceImageUrl);
+        statusHistoryRepository.save(history);
+    }
+
+    private String storeStatusEvidence(MultipartFile image, boolean required, String requiredMessage) {
+        if (image == null || image.isEmpty()) {
+            if (required) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, requiredMessage);
+            }
+            return null;
+        }
+        String contentType = image.getContentType();
+        if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Evidence file must be an image");
+        }
+        return fileStorageService.store(image);
     }
 
     private void requireAdmin(User actor) {

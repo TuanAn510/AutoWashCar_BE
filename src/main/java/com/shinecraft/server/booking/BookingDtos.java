@@ -142,7 +142,11 @@ public final class BookingDtos {
             BigDecimal finalAmount,
             Integer earnedPoints,
             String note,
+            LocalDateTime checkInAt,
+            LocalDateTime serviceStartedAt,
             LocalDateTime completedAt,
+            String checkInImageUrl,
+            String completionImageUrl,
             List<BookingServiceResponse> services) {
         public static BookingResponse from(Booking booking) {
             return new BookingResponse(
@@ -158,7 +162,11 @@ public final class BookingDtos {
                     booking.getFinalAmount(),
                     booking.getEarnedPoints(),
                     booking.getNote(),
+                    booking.getCheckInAt(),
+                    booking.getServiceStartedAt(),
                     booking.getCompletedAt(),
+                    booking.getCheckInImageUrl(),
+                    booking.getCompletionImageUrl(),
                     booking.getServices().stream().map(BookingServiceResponse::from).toList());
         }
     }
@@ -197,6 +205,30 @@ public final class BookingDtos {
             BigDecimal priceSnapshot,
             Integer estimatedDurationSnapshot) {}
 
+    public record AppointmentStatusHistoryResponse(
+            Long id,
+            String oldStatus,
+            String newStatus,
+            String actorId,
+            String actorName,
+            String actorRole,
+            LocalDateTime changedAt,
+            String evidenceImageUrl,
+            String note) {
+        public static AppointmentStatusHistoryResponse from(BookingStatusHistory history) {
+            return new AppointmentStatusHistoryResponse(
+                    history.getId(),
+                    history.getOldStatus() == null ? null : toFrontendStatus(history.getOldStatus()),
+                    toFrontendStatus(history.getNewStatus()),
+                    history.getActor() == null ? null : String.valueOf(history.getActor().getId()),
+                    history.getActor() == null ? null : history.getActor().getFullName(),
+                    history.getActorRole() == null ? null : toFrontendRole(history.getActorRole()),
+                    history.getChangedAt(),
+                    history.getEvidenceImageUrl(),
+                    history.getNote());
+        }
+    }
+
     public record AppointmentResponse(
             @JsonProperty("_id") String uid,
             AppointmentUser customerId,
@@ -217,12 +249,22 @@ public final class BookingDtos {
             String paymentStatus,
             String cancelReason,
             LocalDateTime cancelledAt,
+            LocalDateTime checkInAt,
+            LocalDateTime serviceStartedAt,
             LocalDateTime completedAt,
+            String checkInImageUrl,
+            String completionImageUrl,
+            List<AppointmentStatusHistoryResponse> statusHistory,
             Integer pointsEarned,
             boolean isPointsAwarded,
             LocalDateTime createdAt,
             LocalDateTime updatedAt) {
         public static AppointmentResponse from(Booking booking) {
+            return from(booking, List.of());
+        }
+
+        public static AppointmentResponse from(
+                Booking booking, List<BookingStatusHistory> statusHistory) {
             return new AppointmentResponse(
                     String.valueOf(booking.getId()),
                     new AppointmentUser(
@@ -261,7 +303,12 @@ public final class BookingDtos {
                             : booking.getPaymentStatus().name().toLowerCase(Locale.ROOT),
                     null,
                     booking.getStatus() == BookingStatus.CANCELLED ? booking.getUpdatedAt() : null,
+                    booking.getCheckInAt(),
+                    booking.getServiceStartedAt(),
                     booking.getCompletedAt(),
+                    booking.getCheckInImageUrl(),
+                    booking.getCompletionImageUrl(),
+                    statusHistory.stream().map(AppointmentStatusHistoryResponse::from).toList(),
                     booking.getEarnedPoints(),
                     booking.getEarnedPoints() != null && booking.getEarnedPoints() > 0,
                     booking.getCreatedAt(),
