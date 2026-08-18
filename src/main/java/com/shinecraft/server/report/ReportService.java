@@ -11,6 +11,7 @@ import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyTransaction;
 import com.shinecraft.server.loyalty.LoyaltyTransactionRepository;
+import com.shinecraft.server.loyalty.LoyaltyTransactionStatus;
 import com.shinecraft.server.loyalty.LoyaltyTransactionType;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionRepository;
@@ -315,6 +316,8 @@ public class ReportService {
     private int sumPoints(List<LoyaltyTransaction> transactions, LoyaltyTransactionType type) {
         return transactions.stream()
                 .filter(transaction -> transaction.getType() == type)
+                .filter(transaction -> type != LoyaltyTransactionType.EARN
+                        || transaction.getStatus() == LoyaltyTransactionStatus.POSTED)
                 .mapToInt(transaction -> Math.abs(transaction.getPoints()))
                 .sum();
     }

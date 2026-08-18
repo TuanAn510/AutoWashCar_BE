@@ -9,9 +9,10 @@ import org.springframework.data.jpa.repository.Lock;
 
 public interface PointLotRepository extends JpaRepository<PointLot, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    List<PointLot> findByCustomerAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(User customer, Integer points);
+    List<PointLot> findByCustomerAndEarnTransactionStatusAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(
+            User customer, LoyaltyTransactionStatus status, Integer points);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    List<PointLot> findByExpiresAtBeforeAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(
-            LocalDateTime expiresAt, Integer points);
+    List<PointLot> findByEarnTransactionStatusAndExpiresAtBeforeAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(
+            LoyaltyTransactionStatus status, LocalDateTime expiresAt, Integer points);
 }

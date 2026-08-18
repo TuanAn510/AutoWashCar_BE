@@ -16,6 +16,7 @@ import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyTransaction;
 import com.shinecraft.server.loyalty.LoyaltyTransactionRepository;
+import com.shinecraft.server.loyalty.LoyaltyTransactionStatus;
 import com.shinecraft.server.loyalty.LoyaltyTransactionType;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.RewardRepository;
@@ -84,7 +85,9 @@ class ReportServiceTest {
         when(loyaltyAccountRepository.count()).thenReturn(2L);
         when(rewardRepository.findByIsActiveTrueOrderByRequiredPointsAsc()).thenReturn(List.of());
         when(transactionRepository.findAll()).thenReturn(List.of(
-                transaction(LoyaltyTransactionType.EARN, 10, "2026-02-01T10:00:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.POSTED, 10, "2026-02-01T10:00:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.PENDING, 20, "2026-02-01T10:15:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.REVERSED, 30, "2026-02-01T10:30:00"),
                 transaction(LoyaltyTransactionType.REDEEM, -4, "2026-02-01T11:00:00")));
 
         ReportDtos.DashboardResponse dashboard = reportService.dashboard();
@@ -176,7 +179,9 @@ class ReportServiceTest {
         when(userRepository.findAll()).thenReturn(List.of(activeCustomer, inactiveCustomer, staff));
         when(userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER)).thenReturn(List.of(activeCustomer));
         when(transactionRepository.findAll()).thenReturn(List.of(
-                transaction(LoyaltyTransactionType.EARN, 12, "2026-02-04T10:00:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.POSTED, 12, "2026-02-04T10:00:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.PENDING, 20, "2026-02-04T10:15:00"),
+                transaction(LoyaltyTransactionType.EARN, LoyaltyTransactionStatus.REVERSED, 30, "2026-02-04T10:30:00"),
                 transaction(LoyaltyTransactionType.REDEEM, -5, "2026-02-05T10:00:00"),
                 transaction(LoyaltyTransactionType.EXPIRE, -2, "2026-02-06T10:00:00"),
                 transaction(LoyaltyTransactionType.EARN, 99, "2026-03-01T00:00:00")));
@@ -286,8 +291,14 @@ class ReportServiceTest {
     }
 
     private LoyaltyTransaction transaction(LoyaltyTransactionType type, int points, String createdAt) {
+        return transaction(type, LoyaltyTransactionStatus.POSTED, points, createdAt);
+    }
+
+    private LoyaltyTransaction transaction(
+            LoyaltyTransactionType type, LoyaltyTransactionStatus status, int points, String createdAt) {
         LoyaltyTransaction transaction = new LoyaltyTransaction();
         transaction.setType(type);
+        transaction.setStatus(status);
         transaction.setPoints(points);
         transaction.setCreatedAt(LocalDateTime.parse(createdAt));
         return transaction;
