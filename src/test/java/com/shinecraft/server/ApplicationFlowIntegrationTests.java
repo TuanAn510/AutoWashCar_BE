@@ -22,6 +22,7 @@ import com.jayway.jsonpath.JsonPath;
 import com.shinecraft.server.audit.AuditLog;
 import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingCancellationReason;
 import com.shinecraft.server.booking.BookingPaymentMethod;
 import com.shinecraft.server.booking.BookingPaymentStatus;
 import com.shinecraft.server.booking.BookingRepository;
@@ -1273,9 +1274,10 @@ class ApplicationFlowIntegrationTests {
                         .header("Authorization", bearer(customer.token())))
                 .andExpect(status().isBadRequest());
 
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        paidBooking = bookingRepository.findById(bookingId).orElseThrow();
         paidBooking.setScheduledAt(LocalDate.now().minusDays(1).atTime(9, 17));
         bookingRepository.save(paidBooking);
-        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
         updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
         updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
         updateBookingStatus(adminToken, bookingId, "COMPLETED");
@@ -1293,6 +1295,46 @@ class ApplicationFlowIntegrationTests {
         loyaltyService.postPendingBookingEarning(completed);
         assertThat(loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints())
                 .isEqualTo(afterCompletion.getCurrentPoints());
+    }
+
+    @Test
+    void overduePaidPendingBookingRequiresRefundAndKeepsPaymentPaid() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Long bookingId = createBooking(customer, null, LocalDate.now().plusDays(1).atTime(9, 17));
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "PAID-EXPIRED-" + bookingId);
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        booking.setScheduledAt(LocalDateTime.now().minusMinutes(1));
+        bookingRepository.saveAndFlush(booking);
+
+        bookingService.expireUnconfirmedBookings();
+
+        Booking cancelled = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(cancelled.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(cancelled.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(cancelled.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        assertThat(cancelled.isRefundRequired()).isTrue();
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.REVERSED);
+    }
+
+    @Test
+    void latePaymentAfterAutomaticCancellationStaysCancelledAndReversesEarning() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Long bookingId = createBooking(customer, null, LocalDate.now().plusDays(1).atTime(9, 27));
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        booking.setScheduledAt(LocalDateTime.now().minusMinutes(1));
+        bookingRepository.saveAndFlush(booking);
+        bookingService.expireUnconfirmedBookings();
+
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "LATE-" + bookingId);
+
+        Booking cancelled = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(cancelled.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(cancelled.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(cancelled.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        assertThat(cancelled.isRefundRequired()).isTrue();
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.REVERSED);
     }
 
     @Test

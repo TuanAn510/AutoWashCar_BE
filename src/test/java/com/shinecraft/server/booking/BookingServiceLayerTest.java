@@ -3,6 +3,7 @@ package com.shinecraft.server.booking;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -96,6 +97,8 @@ class BookingServiceLayerTest {
                 .thenReturn(List.of(new User(), new User()));
         when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
         when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any())).thenReturn(List.of());
+        when(bookingRepository.findByIdForLifecycleUpdate(anyLong()))
+                .thenAnswer(invocation -> bookingRepository.findById(invocation.getArgument(0)));
         when(fileStorageService.store(any())).thenReturn("/uploads/status-evidence.jpg");
     }
 
@@ -940,11 +943,12 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void expirationCancelsOnlyStaleUnpaidPendingBookingsAndRestoresResources() {
+    void expirationCancelsOverduePendingBookingsAndRecordsRefundObligation() {
         LocalDateTime now = LocalDateTime.of(2026, 8, 18, 9, 0);
         Booking futurePending = bookingWithStatus(BookingStatus.PENDING);
         futurePending.setScheduledAt(now.plusMinutes(1));
         Booking staleUnpaid = bookingWithStatus(BookingStatus.PENDING);
+        staleUnpaid.setId(100L);
         staleUnpaid.setScheduledAt(now);
         staleUnpaid.setPaymentStatus(BookingPaymentStatus.UNPAID);
         Promotion promotion = new Promotion();
@@ -953,6 +957,7 @@ class BookingServiceLayerTest {
         RewardRedemption redemption = usedRedemption(now.plusDays(1));
         staleUnpaid.setRewardRedemption(redemption);
         Booking stalePaid = bookingWithStatus(BookingStatus.PENDING);
+        stalePaid.setId(101L);
         stalePaid.setScheduledAt(now.minusMinutes(1));
         stalePaid.setPaymentStatus(BookingPaymentStatus.PAID);
         List<Booking> unaffectedStatuses = List.of(
@@ -962,6 +967,9 @@ class BookingServiceLayerTest {
                 bookingWithStatus(BookingStatus.COMPLETED),
                 bookingWithStatus(BookingStatus.CANCELLED));
         unaffectedStatuses.forEach(booking -> booking.setScheduledAt(now.minusMinutes(1)));
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(futurePending));
+        when(bookingRepository.findById(100L)).thenReturn(java.util.Optional.of(staleUnpaid));
+        when(bookingRepository.findById(101L)).thenReturn(java.util.Optional.of(stalePaid));
         when(bookingRepository.findByStatusAndScheduledAtLessThanEqualOrderByScheduledAtAsc(
                         BookingStatus.PENDING, now))
                 .thenReturn(Stream.concat(
@@ -971,10 +979,15 @@ class BookingServiceLayerTest {
 
         int expired = bookingService.expireUnconfirmedBookings(now);
 
-        assertThat(expired).isEqualTo(1);
+        assertThat(expired).isEqualTo(2);
         assertThat(staleUnpaid.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(staleUnpaid.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        assertThat(staleUnpaid.isRefundRequired()).isFalse();
         assertThat(futurePending.getStatus()).isEqualTo(BookingStatus.PENDING);
-        assertThat(stalePaid.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(stalePaid.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(stalePaid.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(stalePaid.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        assertThat(stalePaid.isRefundRequired()).isTrue();
         assertThat(unaffectedStatuses)
                 .extracting(Booking::getStatus)
                 .containsExactly(
@@ -985,7 +998,80 @@ class BookingServiceLayerTest {
                         BookingStatus.CANCELLED);
         verify(promotionService).restoreUsage(promotion);
         verify(loyaltyService).reversePendingBookingEarning(staleUnpaid);
+        verify(loyaltyService).reversePendingBookingEarning(stalePaid);
         assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.AVAILABLE);
+    }
+
+    @Test
+    void repeatedExpirationDoesNotRepeatCancellationSideEffects() {
+        LocalDateTime now = LocalDateTime.of(2026, 8, 18, 9, 0);
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setScheduledAt(now.minusMinutes(1));
+        when(bookingRepository.findByStatusAndScheduledAtLessThanEqualOrderByScheduledAtAsc(
+                        BookingStatus.PENDING, now))
+                .thenReturn(List.of(booking));
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThat(bookingService.expireUnconfirmedBookings(now)).isEqualTo(1);
+        assertThat(bookingService.expireUnconfirmedBookings(now)).isZero();
+
+        verify(loyaltyService).reversePendingBookingEarning(booking);
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+    }
+
+    @Test
+    void expiredPendingBookingCannotBeConfirmed() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setScheduledAt(LocalDateTime.now().minusMinutes(1));
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.CONFIRMED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Lịch hẹn đã quá thời gian xác nhận.");
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+    }
+
+    @Test
+    void pendingBookingCanBeConfirmedBeforeDeadline() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setScheduledAt(LocalDateTime.now().plusHours(1));
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.BookingResponse response = bookingService.updateStatus(99L, BookingStatus.CONFIRMED);
+
+        assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
+    }
+
+    @Test
+    void lateSuccessfulPaymentKeepsAutoCancelledBookingAndReversesEarning() {
+        Booking booking = bookingWithStatus(BookingStatus.CANCELLED);
+        booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        booking.setCancellationReason(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "late-payment");
+
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        assertThat(booking.isRefundRequired()).isTrue();
+        verify(loyaltyService).reversePendingBookingEarning(booking);
+    }
+
+    @Test
+    void appointmentResponseExposesAutoCancellationRefundState() {
+        Booking booking = bookingWithStatus(BookingStatus.CANCELLED);
+        booking.setCancellationReason(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        booking.setRefundRequired(true);
+
+        BookingDtos.AppointmentResponse response = BookingDtos.AppointmentResponse.from(booking);
+
+        assertThat(response.cancelReason()).isEqualTo("store_not_confirmed");
+        assertThat(response.refundRequired()).isTrue();
+        BookingDtos.BookingResponse bookingResponse = BookingDtos.BookingResponse.from(booking);
+        assertThat(bookingResponse.cancelReason()).isEqualTo("store_not_confirmed");
+        assertThat(bookingResponse.refundRequired()).isTrue();
     }
 
     @Test
@@ -1497,6 +1583,9 @@ class BookingServiceLayerTest {
 
     private void assertAllowedTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
         Booking booking = bookingWithStatus(currentStatus);
+        if (currentStatus == BookingStatus.PENDING && requestedStatus == BookingStatus.CONFIRMED) {
+            booking.setScheduledAt(LocalDateTime.now().plusHours(1));
+        }
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
         BookingDtos.BookingResponse response = requestedStatus == BookingStatus.IN_QUEUE

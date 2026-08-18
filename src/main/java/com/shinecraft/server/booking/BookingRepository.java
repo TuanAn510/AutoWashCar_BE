@@ -2,12 +2,22 @@ package com.shinecraft.server.booking;
 
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.vehicle.Vehicle;
+import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface BookingRepository extends JpaRepository<Booking, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @EntityGraph(attributePaths = {"customer", "vehicle", "assignedStaff", "secondaryAssignedStaff", "services", "promotion", "rewardRedemption"})
+    @Query("select booking from Booking booking where booking.id = :id")
+    Optional<Booking> findByIdForLifecycleUpdate(@Param("id") Long id);
+
     @EntityGraph(attributePaths = {"customer", "vehicle", "assignedStaff", "secondaryAssignedStaff", "services"})
     List<Booking> findAllByOrderByScheduledAtDesc();
 
