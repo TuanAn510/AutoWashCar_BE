@@ -141,6 +141,7 @@ public final class VehicleDtos {
             List<ImageResponse> images,
             LocalDateTime deletedAt,
             Long replacedByVehicleId,
+            Boolean customerDismissed,
             LocalDateTime createdAt,
             LocalDateTime updatedAt,
             String verificationStatus,
@@ -163,6 +164,7 @@ public final class VehicleDtos {
                             .toList(),
                     vehicle.isActive() ? null : vehicle.getOwnershipEndAt(),
                     vehicle.getReplacedByVehicleId(),
+                    vehicle.isCustomerDismissed(),
                     vehicle.getCreatedAt(),
                     vehicle.getUpdatedAt(),
                     vehicle.getVerificationStatus() == null

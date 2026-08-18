@@ -86,6 +86,11 @@ public class VehicleController {
         return ApiResponse.ok("Vehicle deleted successfully", vehicleService.delete(id));
     }
 
+    @PatchMapping("/{id}/dismiss")
+    ApiResponse<VehicleDtos.VehicleResponse> dismiss(@PathVariable Long id) {
+        return ApiResponse.ok("Vehicle dismissed successfully", vehicleService.dismiss(id));
+    }
+
     private Integer parseInt(String value) {
         if (value == null || value.isBlank()) {
             return null;

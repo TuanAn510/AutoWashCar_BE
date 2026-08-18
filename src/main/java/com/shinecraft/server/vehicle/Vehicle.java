@@ -56,6 +56,11 @@ public class Vehicle extends BaseEntity {
     @Column(nullable = false)
     private boolean isActive = true;
 
+    /** Khách ẩn xe (đã khóa/bất hoạt) khỏi tab "Đã khóa" của họ. Không xóa dữ liệu,
+     *  chỉ ẩn khỏi danh sách hiển thị; lịch sử lịch hẹn vẫn giữ nguyên. */
+    @Column(nullable = false)
+    private boolean customerDismissed = false;
+
     @OneToMany(mappedBy = "vehicle", fetch = FetchType.LAZY)
     @OrderBy("sortOrder ASC")
     private List<VehicleImage> images = new ArrayList<>();

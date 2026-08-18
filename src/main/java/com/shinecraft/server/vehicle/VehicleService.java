@@ -125,6 +125,15 @@ public class VehicleService {
         boolean plateTaken = directCreate
                 && vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate);
         if (plateTaken) {
+            // Quy tắc ngầm (luồng 3): khách đã sở hữu xe active CÙNG biển + CÙNG
+            // hãng/dòng đã xác minh ⇒ không cho gửi yêu cầu trùng lần nữa. Cùng biển
+            // nhưng KHÁC hãng/dòng ⇒ vẫn cho gửi để admin xác minh (chuyển quyền biển).
+            if (hasAlreadyVerifiedVehicle(plate, request.brand(), request.model())) {
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        "Xe này đã được xác minh rồi, không thể gửi yêu cầu.",
+                        "VEHICLE_ALREADY_VERIFIED");
+            }
             throw new ApiException(HttpStatus.CONFLICT, "Vehicle verification required", "VEHICLE_VERIFICATION_REQUIRED");
         }
 
@@ -162,6 +171,14 @@ public class VehicleService {
         // admin approves. No vehicle is created; the draft is carried by a
         // BRAND_MODEL_VERIFICATION request. The request is committed in its own
         // transaction so it survives the exception that signals the FE.
+        // LUỒNG 4: hãng/dòng chọn "Khác" NHƯNG biển số đang bị một xe ACTIVE khác
+        // giữ ⇒ KHÔNG tạo draft hãng/dòng. Chuyển sang popup xác minh BIỂN (như
+        // luồng 3): khách làm yêu cầu quyền sử dụng biển, gửi kèm hãng/dòng custom
+        // đề xuất; admin duyệt thì xe mới được tạo + xe cũ bị khóa (giữ lịch sử).
+        if (vehicleRepository.existsByLicensePlateAndIsActiveTrue(plate)) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT, "Vehicle verification required", "VEHICLE_VERIFICATION_REQUIRED");
+        }
         String brandText = hasText(request.suggestedBrandName()) ? request.suggestedBrandName().trim() : trim(request.brand());
         String modelText = hasText(request.suggestedModelName()) ? request.suggestedModelName().trim() : trim(request.model());
         requiresNewTx.executeWithoutResult(status ->
@@ -246,6 +263,23 @@ public class VehicleService {
                     request.setReviewNote("Vehicle was deleted by customer");
                     request.setReviewedAt(LocalDateTime.now());
                 });
+        return VehicleDtos.VehicleResponse.from(vehicleRepository.save(vehicle));
+    }
+
+    /** Ẩn một xe đã bất hoạt (đã khóa / biển chuyển quyền / đã xóa mềm) khỏi tab
+     *  "Đã khóa" của customer. KHÔNG xóa dữ liệu — xe có lịch hẹn trỏ tới (FK) nên
+     *  không thể xóa dòng; chỉ đánh cờ customer_dismissed để chủ xe không còn thấy
+     *  nó trong danh sách nữa. Lịch sử lịch hẹn / dịch vụ vẫn giữ nguyên. */
+    @Transactional
+    public VehicleDtos.VehicleResponse dismiss(Long id) {
+        Vehicle vehicle = vehicleRepository
+                .findById(id)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Vehicle not found"));
+        if (vehicle.isActive()) {
+            throw new ApiException(HttpStatus.CONFLICT, "Chỉ xe đã khóa (bất hoạt) mới có thể ẩn khỏi danh sách.");
+        }
+        requireAdminOrOwner(vehicle);
+        vehicle.setCustomerDismissed(true);
         return VehicleDtos.VehicleResponse.from(vehicleRepository.save(vehicle));
     }
 
@@ -425,6 +459,28 @@ public class VehicleService {
         if (request.model() == null || request.model().isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Model is required");
         }
+    }
+
+    /** Quy tắc ngầm luồng 3: khách đã sở hữu xe active CÙNG biển + CÙNG tên hãng và
+     *  dòng (đã xác minh thành công) ⇒ coi là "xe đã xác minh rồi", chặn gửi yêu cầu
+     *  trùng. So sánh biển đã chuẩn hóa và hãng/dòng không phân biệt hoa thường, bỏ
+     *  khoảng trắng thừa. */
+    private boolean hasAlreadyVerifiedVehicle(String licensePlate, String brand, String model) {
+        if (brand == null || model == null) {
+            return false;
+        }
+        String plate = LicensePlateNormalizer.normalize(licensePlate);
+        String targetBrand = brand.trim();
+        String targetModel = model.trim();
+        User customer = authService.currentUser();
+        return vehicleRepository.findByCustomerAndIsActiveTrue(customer).stream()
+                .anyMatch(vehicle ->
+                        vehicle.getVerificationStatus() == VehicleVerificationStatus.APPROVED
+                                && plate.equals(LicensePlateNormalizer.normalize(vehicle.getLicensePlate()))
+                                && targetBrand.equalsIgnoreCase(
+                                        vehicle.getBrand() == null ? "" : vehicle.getBrand().trim())
+                                && targetModel.equalsIgnoreCase(
+                                        vehicle.getModel() == null ? "" : vehicle.getModel().trim()));
     }
 
     private void requireAdmin() {
