@@ -22,7 +22,10 @@ import com.jayway.jsonpath.JsonPath;
 import com.shinecraft.server.audit.AuditLog;
 import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingPaymentMethod;
+import com.shinecraft.server.booking.BookingPaymentStatus;
 import com.shinecraft.server.booking.BookingRepository;
+import com.shinecraft.server.booking.BookingServiceLayer;
 import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
@@ -32,6 +35,7 @@ import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.LoyaltyTransaction;
 import com.shinecraft.server.loyalty.LoyaltyTransactionRepository;
+import com.shinecraft.server.loyalty.LoyaltyTransactionStatus;
 import com.shinecraft.server.loyalty.LoyaltyTransactionType;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
@@ -108,6 +112,9 @@ class ApplicationFlowIntegrationTests {
 
     @Autowired
     private LoyaltyService loyaltyService;
+
+    @Autowired
+    private BookingServiceLayer bookingService;
 
     @Autowired
     private LoyaltyAccountRepository loyaltyAccountRepository;
@@ -1225,6 +1232,113 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void paidUnfinishedBookingPointsStayLockedUntilCompletionAndPostExactlyOnce() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(
+                customer, null, LocalDate.now().plusDays(1).atTime(9, 17));
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(200000), 20, "Existing posted points", null);
+        LoyaltyAccount beforePayment = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
+        int baselineCurrent = beforePayment.getCurrentPoints();
+        int baselineLifetime = beforePayment.getLifetimePoints();
+        BigDecimal baselineSpending = beforePayment.getTotalSpending();
+        int baselineVisits = beforePayment.getVisitCount();
+
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "LOCKED-" + bookingId);
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "LOCKED-" + bookingId);
+
+        Booking paidBooking = bookingRepository.findById(bookingId).orElseThrow();
+        LoyaltyTransaction earning = bookingEarning(bookingId);
+        LoyaltyAccount whilePending = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
+        assertThat(paidBooking.getEarnedPoints()).isPositive();
+        assertThat(earning.getStatus()).isEqualTo(LoyaltyTransactionStatus.PENDING);
+        assertThat(transactionRepository.findAll().stream()
+                        .filter(transaction -> transaction.getBooking() != null)
+                        .filter(transaction -> transaction.getBooking().getId().equals(bookingId))
+                        .filter(transaction -> transaction.getType() == LoyaltyTransactionType.EARN))
+                .hasSize(1);
+        assertThat(whilePending.getCurrentPoints()).isEqualTo(baselineCurrent);
+        assertThat(whilePending.getLifetimePoints()).isEqualTo(baselineLifetime);
+        assertThat(whilePending.getTotalSpending()).isEqualByComparingTo(baselineSpending);
+        assertThat(whilePending.getVisitCount()).isEqualTo(baselineVisits);
+
+        Reward postedPointsReward = createReward("Posted points remain spendable", RewardType.DISCOUNT_CODE, null, "1000");
+        redeemReward(customer, postedPointsReward);
+        Reward lockedPointsReward = createReward("Locked points are unavailable", RewardType.DISCOUNT_CODE, null, "1000");
+        lockedPointsReward.setRequiredPoints(baselineCurrent);
+        rewardRepository.save(lockedPointsReward);
+        mockMvc.perform(post("/api/rewards/{rewardId}/redeem", lockedPointsReward.getId())
+                        .header("Authorization", bearer(customer.token())))
+                .andExpect(status().isBadRequest());
+
+        paidBooking.setScheduledAt(LocalDate.now().minusDays(1).atTime(9, 17));
+        bookingRepository.save(paidBooking);
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
+        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
+        updateBookingStatus(adminToken, bookingId, "COMPLETED");
+
+        Booking completed = bookingRepository.findById(bookingId).orElseThrow();
+        LoyaltyAccount afterCompletion = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.POSTED);
+        assertThat(afterCompletion.getCurrentPoints())
+                .isEqualTo(baselineCurrent - postedPointsReward.getRequiredPoints() + completed.getEarnedPoints());
+        assertThat(afterCompletion.getLifetimePoints()).isEqualTo(baselineLifetime + completed.getEarnedPoints());
+        assertThat(afterCompletion.getTotalSpending())
+                .isEqualByComparingTo(baselineSpending.add(completed.getFinalAmount()));
+        assertThat(afterCompletion.getVisitCount()).isEqualTo(baselineVisits + 1);
+
+        loyaltyService.postPendingBookingEarning(completed);
+        assertThat(loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints())
+                .isEqualTo(afterCompletion.getCurrentPoints());
+    }
+
+    @Test
+    void confirmedQueuedAndInProgressBookingPointsRemainLocked() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(
+                customer, null, LocalDate.now().plusDays(1).atTime(10, 17));
+        int baseline = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints();
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "STATUS-" + bookingId);
+
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        assertPendingEarningAndBalance(bookingId, customer.user(), baseline);
+        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
+        assertPendingEarningAndBalance(bookingId, customer.user(), baseline);
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        booking.setScheduledAt(LocalDate.now().minusDays(1).atTime(10, 17));
+        bookingRepository.save(booking);
+        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
+        assertPendingEarningAndBalance(bookingId, customer.user(), baseline);
+    }
+
+    @Test
+    void cancellationReversesPendingBookingEarningExactlyOnce() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(
+                customer, null, LocalDate.now().plusDays(1).atTime(11, 17));
+        int baseline = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints();
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "REVERSE-" + bookingId);
+
+        updateBookingStatus(adminToken, bookingId, "CANCELLED");
+        Booking cancelled = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.REVERSED);
+        assertThat(loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints())
+                .isEqualTo(baseline);
+
+        loyaltyService.reversePendingBookingEarning(cancelled);
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.REVERSED);
+        assertThat(loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints())
+                .isEqualTo(baseline);
+    }
+
+    @Test
     void paidCustomerCannotCancelPendingBookingOrRestorePromotionUsage() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();
@@ -1589,6 +1703,21 @@ class ApplicationFlowIntegrationTests {
                 .andReturn();
         Integer redemptionId = JsonPath.read(result.getResponse().getContentAsString(), "$.data.id");
         return redemptionId.longValue();
+    }
+
+    private LoyaltyTransaction bookingEarning(Long bookingId) {
+        return transactionRepository.findAll().stream()
+                .filter(transaction -> transaction.getBooking() != null)
+                .filter(transaction -> transaction.getBooking().getId().equals(bookingId))
+                .filter(transaction -> transaction.getType() == LoyaltyTransactionType.EARN)
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private void assertPendingEarningAndBalance(Long bookingId, User customer, int expectedBalance) {
+        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.PENDING);
+        assertThat(loyaltyAccountRepository.findByCustomer(customer).orElseThrow().getCurrentPoints())
+                .isEqualTo(expectedBalance);
     }
 
     private Reward createReward(String name, RewardType type, CarWashService addOnService, String discountAmount) {

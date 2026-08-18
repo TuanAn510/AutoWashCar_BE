@@ -1,6 +1,8 @@
 package com.shinecraft.server.loyalty;
 
 import com.shinecraft.server.audit.AuditTrailService;
+import com.shinecraft.server.booking.Booking;
+import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
@@ -156,7 +158,10 @@ public class LoyaltyService {
         int running = 0;
         java.util.Map<Long, Integer> balanceByTransactionId = new java.util.LinkedHashMap<>();
         for (LoyaltyTransaction transaction : transactions) {
-            running += transaction.getPoints();
+            if (transaction.getType() != LoyaltyTransactionType.EARN
+                    || transaction.getStatus() == LoyaltyTransactionStatus.POSTED) {
+                running += transaction.getPoints();
+            }
             balanceByTransactionId.put(transaction.getId(), running);
         }
         return transactions.stream()
@@ -339,35 +344,21 @@ public class LoyaltyService {
     @Transactional
     public void earnPoints(User customer, BigDecimal amount, int points, String description, Object booking) {
         LocalDateTime now = LocalDateTime.now();
-        LoyaltyAccount account = getOrCreateAccountForUpdate(customer);
-        account.setCurrentPoints(account.getCurrentPoints() + points);
-        account.setLifetimePoints(account.getLifetimePoints() + points);
-        account.setTotalSpending(account.getTotalSpending().add(amount));
-        account.setVisitCount(account.getVisitCount() + 1);
-
-        // Auto-upgrade membership tier based on lifetime points
-        MembershipTier newTier = findTier(account.getLifetimePoints());
-        MembershipTier currentTier = account.getMembershipTier();
-        log.info("Earned {} points for customer {}. Current points: {}, current tier: {}, new tier: {}",
-                points, customer.getId(), account.getCurrentPoints(),
-                currentTier != null ? currentTier.getName() : "none",
-                newTier != null ? newTier.getName() : "none");
-        if (newTier != null && (currentTier == null
-                || newTier.getPriorityLevel() > currentTier.getPriorityLevel())) {
-            account.setMembershipTier(newTier);
-            log.info("Upgraded customer {} from {} to {}",
-                    customer.getId(),
-                    currentTier != null ? currentTier.getName() : "none",
-                    newTier.getName());
+        Booking linkedBooking = booking instanceof Booking value ? value : null;
+        if (linkedBooking != null
+                && transactionRepository.findByBookingAndType(linkedBooking, LoyaltyTransactionType.EARN).isPresent()) {
+            return;
         }
-        accountRepository.saveAndFlush(account);
+        boolean pending = linkedBooking != null && linkedBooking.getStatus() != BookingStatus.COMPLETED;
+        if (!pending) {
+            postAccountMetrics(customer, amount, points);
+        }
 
         LoyaltyTransaction transaction = new LoyaltyTransaction();
         transaction.setCustomer(customer);
-        if (booking instanceof com.shinecraft.server.booking.Booking b) {
-            transaction.setBooking(b);
-        }
+        transaction.setBooking(linkedBooking);
         transaction.setType(LoyaltyTransactionType.EARN);
+        transaction.setStatus(pending ? LoyaltyTransactionStatus.PENDING : LoyaltyTransactionStatus.POSTED);
         transaction.setPoints(points);
         transaction.setDescription(description);
         transaction.setExpiresAt(now.plusMonths(pointExpiryMonths));
@@ -381,6 +372,47 @@ public class LoyaltyService {
         lot.setEarnedAt(now);
         lot.setExpiresAt(transaction.getExpiresAt());
         pointLotRepository.save(lot);
+    }
+
+    @Transactional
+    public void postPendingBookingEarning(Booking booking) {
+        transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
+                .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
+                .ifPresent(transaction -> {
+                    postAccountMetrics(booking.getCustomer(), booking.getFinalAmount(), transaction.getPoints());
+                    transaction.setStatus(LoyaltyTransactionStatus.POSTED);
+                });
+    }
+
+    @Transactional
+    public void reversePendingBookingEarning(Booking booking) {
+        transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
+                .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
+                .ifPresent(transaction -> transaction.setStatus(LoyaltyTransactionStatus.REVERSED));
+    }
+
+    private void postAccountMetrics(User customer, BigDecimal amount, int points) {
+        LoyaltyAccount account = getOrCreateAccountForUpdate(customer);
+        account.setCurrentPoints(account.getCurrentPoints() + points);
+        account.setLifetimePoints(account.getLifetimePoints() + points);
+        account.setTotalSpending(account.getTotalSpending().add(amount));
+        account.setVisitCount(account.getVisitCount() + 1);
+
+        MembershipTier newTier = findTier(account.getLifetimePoints());
+        MembershipTier currentTier = account.getMembershipTier();
+        log.info("Posted {} points for customer {}. Current points: {}, current tier: {}, new tier: {}",
+                points, customer.getId(), account.getCurrentPoints(),
+                currentTier != null ? currentTier.getName() : "none",
+                newTier != null ? newTier.getName() : "none");
+        if (newTier != null && (currentTier == null
+                || newTier.getPriorityLevel() > currentTier.getPriorityLevel())) {
+            account.setMembershipTier(newTier);
+            log.info("Upgraded customer {} from {} to {}",
+                    customer.getId(),
+                    currentTier != null ? currentTier.getName() : "none",
+                    newTier.getName());
+        }
+        accountRepository.saveAndFlush(account);
     }
 
     @Scheduled(cron = "0 0 2 1 * *")
@@ -407,7 +439,9 @@ public class LoyaltyService {
     @Transactional
     public int expireOldPoints(LocalDateTime now) {
         List<PointLot> expiredLots =
-                pointLotRepository.findByExpiresAtBeforeAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(now, 0);
+                pointLotRepository
+                        .findByEarnTransactionStatusAndExpiresAtBeforeAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(
+                                LoyaltyTransactionStatus.POSTED, now, 0);
         int expiredTotal = 0;
         for (PointLot lot : expiredLots) {
             LoyaltyAccount account = getOrCreateAccountForUpdate(lot.getCustomer());
@@ -538,7 +572,9 @@ public class LoyaltyService {
     private void useOldestPointLots(User customer, int points) {
         int remaining = points;
         List<PointLot> lots =
-                pointLotRepository.findByCustomerAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(customer, 0);
+                pointLotRepository
+                        .findByCustomerAndEarnTransactionStatusAndRemainingPointsGreaterThanOrderByExpiresAtAscIdAsc(
+                                customer, LoyaltyTransactionStatus.POSTED, 0);
         for (PointLot lot : lots) {
             if (remaining <= 0) {
                 break;

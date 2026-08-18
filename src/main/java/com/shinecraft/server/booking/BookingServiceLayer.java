@@ -551,6 +551,7 @@ public class BookingServiceLayer {
             booking.setServiceStartedAt(LocalDateTime.now());
         }
         if (status == BookingStatus.CANCELLED) {
+            loyaltyService.reversePendingBookingEarning(booking);
             restoreCancellationResources(booking);
         }
         booking.setStatus(status);
@@ -562,6 +563,7 @@ public class BookingServiceLayer {
             }
             booking.setCompletedAt(LocalDateTime.now());
             awardPointsForBooking(booking);
+            loyaltyService.postPendingBookingEarning(booking);
             // Cash is collected on-site by staff. When the appointment is completed,
             // auto-confirm the payment as PAID so admin sees it paid without a separate
             // confirmation (only admin could previously confirm cash payments).
@@ -600,6 +602,7 @@ public class BookingServiceLayer {
                 continue;
             }
             String beforeValue = bookingAuditValue(booking);
+            loyaltyService.reversePendingBookingEarning(booking);
             restoreCancellationResources(booking);
             booking.setStatus(BookingStatus.CANCELLED);
             auditTrailService.record(

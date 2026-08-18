@@ -45,6 +45,10 @@ public class LoyaltyTransaction {
     @Column(nullable = false, length = 30)
     private LoyaltyTransactionType type;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private LoyaltyTransactionStatus status = LoyaltyTransactionStatus.POSTED;
+
     @Column(nullable = false)
     private Integer points;
 

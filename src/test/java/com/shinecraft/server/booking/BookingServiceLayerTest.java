@@ -774,6 +774,7 @@ class BookingServiceLayerTest {
         assertThat(booking.getEarnedPoints()).isEqualTo(1);
         verify(loyaltyService).earnPoints(
                 customer, BigDecimal.valueOf(10000), 1, "Earned points from booking #99", booking);
+        verify(loyaltyService).postPendingBookingEarning(booking);
     }
 
     @Test
@@ -833,6 +834,7 @@ class BookingServiceLayerTest {
 
         bookingService.updateStatus(99L, BookingStatus.CANCELLED);
 
+        verify(loyaltyService).reversePendingBookingEarning(booking);
         verify(promotionService).restoreUsage(promotion);
         assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.AVAILABLE);
         assertThat(redemption.getUsedAt()).isNull();
@@ -982,6 +984,7 @@ class BookingServiceLayerTest {
                         BookingStatus.COMPLETED,
                         BookingStatus.CANCELLED);
         verify(promotionService).restoreUsage(promotion);
+        verify(loyaltyService).reversePendingBookingEarning(staleUnpaid);
         assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.AVAILABLE);
     }
 
