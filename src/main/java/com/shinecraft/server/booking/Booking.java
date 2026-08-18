@@ -96,6 +96,13 @@ public class Booking extends BaseEntity {
     @Column(length = 100)
     private String paymentGatewayRef;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_reason", length = 40)
+    private BookingCancellationReason cancellationReason;
+
+    @Column(name = "refund_required", nullable = false)
+    private boolean refundRequired = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")
     private Promotion promotion;

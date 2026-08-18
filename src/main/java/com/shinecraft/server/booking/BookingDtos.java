@@ -137,6 +137,8 @@ public final class BookingDtos {
             String licensePlate,
             LocalDateTime scheduledAt,
             BookingStatus status,
+            String cancelReason,
+            boolean refundRequired,
             BigDecimal subtotalAmount,
             BigDecimal discountAmount,
             BigDecimal finalAmount,
@@ -157,6 +159,8 @@ public final class BookingDtos {
                     booking.getVehicle().getLicensePlate(),
                     booking.getScheduledAt(),
                     booking.getStatus(),
+                    toFrontendCancellationReason(booking.getCancellationReason()),
+                    booking.isRefundRequired(),
                     booking.getSubtotalAmount(),
                     booking.getDiscountAmount(),
                     booking.getFinalAmount(),
@@ -169,6 +173,10 @@ public final class BookingDtos {
                     booking.getCompletionImageUrl(),
                     booking.getServices().stream().map(BookingServiceResponse::from).toList());
         }
+    }
+
+    private static String toFrontendCancellationReason(BookingCancellationReason reason) {
+        return reason == null ? null : reason.name().toLowerCase(Locale.ROOT);
     }
 
     public record QueueItemResponse(
@@ -248,6 +256,7 @@ public final class BookingDtos {
             String paymentMethod,
             String paymentStatus,
             String cancelReason,
+            boolean refundRequired,
             LocalDateTime cancelledAt,
             LocalDateTime checkInAt,
             LocalDateTime serviceStartedAt,
@@ -301,7 +310,8 @@ public final class BookingDtos {
                     booking.getStatus() == BookingStatus.CANCELLED
                             ? "cancelled"
                             : booking.getPaymentStatus().name().toLowerCase(Locale.ROOT),
-                    null,
+                    BookingDtos.toFrontendCancellationReason(booking.getCancellationReason()),
+                    booking.isRefundRequired(),
                     booking.getStatus() == BookingStatus.CANCELLED ? booking.getUpdatedAt() : null,
                     booking.getCheckInAt(),
                     booking.getServiceStartedAt(),

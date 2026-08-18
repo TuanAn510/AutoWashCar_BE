@@ -521,13 +521,18 @@ public class BookingServiceLayer {
     private BookingDtos.BookingResponse updateStatus(
             Long bookingId, BookingStatus status, MultipartFile evidenceImage, boolean requireEvidence) {
         Booking booking = bookingRepository
-                .findById(bookingId)
+                .findByIdForLifecycleUpdate(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Booking not found"));
         User actor = authService.currentUser();
         requireCanUpdateStatus(actor, booking, status);
         String beforeValue = bookingAuditValue(booking);
         BookingStatus currentStatus = booking.getStatus();
         validateStatusTransition(currentStatus, status);
+        if (currentStatus == BookingStatus.PENDING
+                && status == BookingStatus.CONFIRMED
+                && !LocalDateTime.now().isBefore(booking.getScheduledAt())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Lịch hẹn đã quá thời gian xác nhận.");
+        }
         if (enforceScheduleTime
                 && (status == BookingStatus.IN_PROGRESS || status == BookingStatus.COMPLETED)
                 && booking.getScheduledAt().isAfter(LocalDateTime.now())) {
@@ -594,16 +599,23 @@ public class BookingServiceLayer {
         int expiredCount = 0;
         List<Booking> candidates = bookingRepository
                 .findByStatusAndScheduledAtLessThanEqualOrderByScheduledAtAsc(BookingStatus.PENDING, now);
-        for (Booking booking : candidates) {
+        for (Booking candidate : candidates) {
+            Booking booking = bookingRepository
+                    .findByIdForLifecycleUpdate(candidate.getId())
+                    .orElse(null);
+            if (booking == null) {
+                continue;
+            }
             if (booking.getStatus() != BookingStatus.PENDING
                     || booking.getScheduledAt() == null
-                    || booking.getScheduledAt().isAfter(now)
-                    || booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+                    || booking.getScheduledAt().isAfter(now)) {
                 continue;
             }
             String beforeValue = bookingAuditValue(booking);
             loyaltyService.reversePendingBookingEarning(booking);
             restoreCancellationResources(booking);
+            booking.setCancellationReason(BookingCancellationReason.STORE_NOT_CONFIRMED);
+            booking.setRefundRequired(booking.getPaymentStatus() == BookingPaymentStatus.PAID);
             booking.setStatus(BookingStatus.CANCELLED);
             auditTrailService.record(
                     null,
@@ -676,7 +688,7 @@ public class BookingServiceLayer {
     @Transactional
     public void confirmPaymentInternal(
             Long bookingId, BookingPaymentStatus status, BookingPaymentMethod method, String gatewayRef) {
-        Booking booking = findBooking(bookingId);
+        Booking booking = findBookingForLifecycleUpdate(bookingId);
         // Only update if not already PAID (prevent duplicate IPN + return)
         if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
             return;
@@ -690,6 +702,11 @@ public class BookingServiceLayer {
         // without waiting for the appointment to be completed.
         if (status == BookingPaymentStatus.PAID) {
             awardPointsForBooking(booking);
+            if (booking.getStatus() == BookingStatus.CANCELLED
+                    && booking.getCancellationReason() == BookingCancellationReason.STORE_NOT_CONFIRMED) {
+                booking.setRefundRequired(true);
+                loyaltyService.reversePendingBookingEarning(booking);
+            }
         }
         auditTrailService.record(
                 null,
@@ -1151,6 +1168,12 @@ public class BookingServiceLayer {
     private Booking findBooking(Long bookingId) {
         return bookingRepository
                 .findById(bookingId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
+    }
+
+    private Booking findBookingForLifecycleUpdate(Long bookingId) {
+        return bookingRepository
+                .findByIdForLifecycleUpdate(bookingId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Appointment not found"));
     }
 
