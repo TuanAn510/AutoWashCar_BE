@@ -35,6 +35,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Isolation;
@@ -852,12 +853,37 @@ class BookingServiceLayerTest {
     void customerCanCancelAnUnpaidPendingBooking() {
         customer.setRole(UserRole.ROLE_CUSTOMER);
         Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setScheduledAt(LocalDateTime.now().plusMinutes(31));
         booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
         bookingService.updateStatus(99L, BookingStatus.CANCELLED);
 
         assertThat(booking.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+    }
+
+    @Test
+    void customerCannotCancelAtOrInsideTheThirtyMinuteDeadline() {
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+        Booking atBoundary = bookingWithStatus(BookingStatus.PENDING);
+        atBoundary.setScheduledAt(LocalDateTime.now().plusMinutes(30));
+        atBoundary.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(atBoundary));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Chỉ có thể hủy lịch trước giờ hẹn ít nhất 30 phút.");
+
+        Booking insideDeadline = bookingWithStatus(BookingStatus.PENDING);
+        insideDeadline.setScheduledAt(LocalDateTime.now().plusMinutes(29));
+        insideDeadline.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        when(bookingRepository.findById(100L)).thenReturn(java.util.Optional.of(insideDeadline));
+
+        assertThatThrownBy(() -> bookingService.updateStatus(100L, BookingStatus.CANCELLED))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Chỉ có thể hủy lịch trước giờ hẹn ít nhất 30 phút.");
+        assertThat(atBoundary.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(insideDeadline.getStatus()).isEqualTo(BookingStatus.PENDING);
     }
 
     @Test
@@ -880,6 +906,54 @@ class BookingServiceLayerTest {
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
         assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.USED);
         verify(promotionService, never()).restoreUsage(promotion);
+    }
+
+    @Test
+    void expirationCancelsOnlyStaleUnpaidPendingBookingsAndRestoresResources() {
+        LocalDateTime now = LocalDateTime.of(2026, 8, 18, 9, 0);
+        Booking futurePending = bookingWithStatus(BookingStatus.PENDING);
+        futurePending.setScheduledAt(now.plusMinutes(1));
+        Booking staleUnpaid = bookingWithStatus(BookingStatus.PENDING);
+        staleUnpaid.setScheduledAt(now);
+        staleUnpaid.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        Promotion promotion = new Promotion();
+        promotion.setUsedCount(1);
+        staleUnpaid.setPromotion(promotion);
+        RewardRedemption redemption = usedRedemption(now.plusDays(1));
+        staleUnpaid.setRewardRedemption(redemption);
+        Booking stalePaid = bookingWithStatus(BookingStatus.PENDING);
+        stalePaid.setScheduledAt(now.minusMinutes(1));
+        stalePaid.setPaymentStatus(BookingPaymentStatus.PAID);
+        List<Booking> unaffectedStatuses = List.of(
+                bookingWithStatus(BookingStatus.CONFIRMED),
+                bookingWithStatus(BookingStatus.IN_QUEUE),
+                bookingWithStatus(BookingStatus.IN_PROGRESS),
+                bookingWithStatus(BookingStatus.COMPLETED),
+                bookingWithStatus(BookingStatus.CANCELLED));
+        unaffectedStatuses.forEach(booking -> booking.setScheduledAt(now.minusMinutes(1)));
+        when(bookingRepository.findByStatusAndScheduledAtLessThanEqualOrderByScheduledAtAsc(
+                        BookingStatus.PENDING, now))
+                .thenReturn(Stream.concat(
+                                Stream.of(futurePending, staleUnpaid, stalePaid),
+                                unaffectedStatuses.stream())
+                        .toList());
+
+        int expired = bookingService.expireUnconfirmedBookings(now);
+
+        assertThat(expired).isEqualTo(1);
+        assertThat(staleUnpaid.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(futurePending.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(stalePaid.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(unaffectedStatuses)
+                .extracting(Booking::getStatus)
+                .containsExactly(
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.IN_QUEUE,
+                        BookingStatus.IN_PROGRESS,
+                        BookingStatus.COMPLETED,
+                        BookingStatus.CANCELLED);
+        verify(promotionService).restoreUsage(promotion);
+        assertThat(redemption.getStatus()).isEqualTo(RewardRedemptionStatus.AVAILABLE);
     }
 
     @Test
