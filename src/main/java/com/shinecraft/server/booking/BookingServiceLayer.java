@@ -38,6 +38,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -581,6 +582,37 @@ public class BookingServiceLayer {
         return BookingDtos.BookingResponse.from(booking);
     }
 
+    @Scheduled(cron = "${app.booking.expiration-cron:0 * * * * *}")
+    @Transactional
+    public void expireUnconfirmedBookings() {
+        expireUnconfirmedBookings(LocalDateTime.now());
+    }
+
+    int expireUnconfirmedBookings(LocalDateTime now) {
+        int expiredCount = 0;
+        List<Booking> candidates = bookingRepository
+                .findByStatusAndScheduledAtLessThanEqualOrderByScheduledAtAsc(BookingStatus.PENDING, now);
+        for (Booking booking : candidates) {
+            if (booking.getStatus() != BookingStatus.PENDING
+                    || booking.getScheduledAt() == null
+                    || booking.getScheduledAt().isAfter(now)
+                    || booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+                continue;
+            }
+            String beforeValue = bookingAuditValue(booking);
+            restoreCancellationResources(booking);
+            booking.setStatus(BookingStatus.CANCELLED);
+            auditTrailService.record(
+                    null,
+                    booking.getCustomer(),
+                    "BOOKING_AUTO_CANCELLED",
+                    beforeValue,
+                    bookingAuditValue(booking));
+            expiredCount++;
+        }
+        return expiredCount;
+    }
+
     @Transactional
     public BookingDtos.AppointmentResponse updateAppointmentStatus(Long bookingId, BookingStatus status) {
         updateStatus(bookingId, status);
@@ -839,6 +871,12 @@ public class BookingServiceLayer {
                 && requestedStatus == BookingStatus.CANCELLED) {
             if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Lịch hẹn đã được thanh toán nên không thể hủy.");
+            }
+            if (!LocalDateTime.now().isBefore(
+                    booking.getScheduledAt().minusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
+                throw new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "Chỉ có thể hủy lịch trước giờ hẹn ít nhất 30 phút.");
             }
             return;
         }

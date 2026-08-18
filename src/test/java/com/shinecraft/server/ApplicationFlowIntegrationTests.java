@@ -23,6 +23,7 @@ import com.shinecraft.server.audit.AuditLog;
 import com.shinecraft.server.audit.AuditLogRepository;
 import com.shinecraft.server.booking.Booking;
 import com.shinecraft.server.booking.BookingRepository;
+import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
@@ -77,7 +78,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-@SpringBootTest
+@SpringBootTest(properties = "app.booking.expiration-cron=-")
 @AutoConfigureMockMvc
 class ApplicationFlowIntegrationTests {
     private static final AtomicInteger SEQUENCE = new AtomicInteger(1000000);
@@ -1250,6 +1251,29 @@ class ApplicationFlowIntegrationTests {
         assertThat(booking.getStatus().name()).isEqualTo("PENDING");
         assertThat(booking.getPaymentStatus().name()).isEqualTo("PAID");
         assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void customerCancellationApiEnforcesThirtyMinuteDeadline() throws Exception {
+        CustomerContext customer = registerCustomer();
+        Long bookingId = createBooking(
+                customer, null, LocalDate.now().plusDays(1).atTime(13, 17));
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        booking.setScheduledAt(LocalDateTime.now().plusMinutes(29));
+        bookingRepository.save(booking);
+
+        mockMvc.perform(patch("/api/appointments/my/{id}/cancel", bookingId)
+                        .header("Authorization", bearer(customer.token())))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath(
+                        "$.message",
+                        is("Chỉ có thể hủy lịch trước giờ hẹn ít nhất 30 phút.")));
+
+        Booking unchangedBooking = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(unchangedBooking.getStatus().name()).isEqualTo("PENDING");
+
+        unchangedBooking.setStatus(BookingStatus.CANCELLED);
+        bookingRepository.save(unchangedBooking);
     }
 
     @Test
