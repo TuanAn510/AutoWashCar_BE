@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -31,15 +32,15 @@ public class FileStorageService {
     }
 
     public String store(MultipartFile file) {
-        String originalName = file.getOriginalFilename();
-        String extension = "";
-        if (originalName != null && originalName.contains(".")) {
-            extension = originalName.substring(originalName.lastIndexOf("."));
-        }
-        String storedName = UUID.randomUUID() + extension;
+        String extension = safeExtension(file.getOriginalFilename());
+        String imagePrefix = isImage(file) ? "image-" : "";
+        String storedName = imagePrefix + UUID.randomUUID() + extension;
 
         try {
-            Path targetPath = uploadPath.resolve(storedName);
+            Path targetPath = uploadPath.resolve(storedName).normalize();
+            if (!uploadPath.equals(targetPath.getParent())) {
+                throw new IOException("Resolved upload path is outside configured storage");
+            }
             Files.copy(file.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
             return "/uploads/" + storedName;
         } catch (IOException e) {
@@ -50,9 +51,26 @@ public class FileStorageService {
     public void delete(String url) {
         if (url == null || !url.startsWith("/uploads/")) return;
         String fileName = url.substring("/uploads/".length());
+        Path targetPath = uploadPath.resolve(fileName).normalize();
+        if (!uploadPath.equals(targetPath.getParent())) return;
         try {
-            Files.deleteIfExists(uploadPath.resolve(fileName));
+            Files.deleteIfExists(targetPath);
         } catch (IOException ignored) {
         }
+    }
+
+    private boolean isImage(MultipartFile file) {
+        String contentType = file.getContentType();
+        return contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("image/");
+    }
+
+    private String safeExtension(String originalName) {
+        if (originalName == null || originalName.isBlank()) return "";
+        int lastSeparator = Math.max(originalName.lastIndexOf('/'), originalName.lastIndexOf('\\'));
+        String fileName = originalName.substring(lastSeparator + 1);
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot < 0 || lastDot == fileName.length() - 1) return "";
+        String extension = fileName.substring(lastDot + 1);
+        return extension.matches("[A-Za-z0-9]{1,10}") ? "." + extension.toLowerCase(Locale.ROOT) : "";
     }
 }
