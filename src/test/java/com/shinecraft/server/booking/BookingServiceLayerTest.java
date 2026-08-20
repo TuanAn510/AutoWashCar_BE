@@ -1056,7 +1056,22 @@ class BookingServiceLayerTest {
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
         assertThat(booking.getCancellationReason()).isEqualTo(BookingCancellationReason.STORE_NOT_CONFIRMED);
         assertThat(booking.isRefundRequired()).isTrue();
+        verify(loyaltyService, never()).earnPoints(any(), any(), any(Integer.class), any(), any());
         verify(loyaltyService).reversePendingBookingEarning(booking);
+    }
+
+    @Test
+    void successfulPaymentDoesNotCreateBookingEarningBeforeCompletion() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "payment-success");
+
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getEarnedPoints()).isZero();
+        verify(loyaltyService, never()).earnPoints(any(), any(), any(Integer.class), any(), any());
     }
 
     @Test
