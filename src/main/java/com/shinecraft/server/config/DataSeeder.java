@@ -34,6 +34,7 @@ import com.shinecraft.server.vehicle.VehicleModelRepository;
 import com.shinecraft.server.vehicle.VehicleRepository;
 import com.shinecraft.server.vehicle.VehicleVerificationStatus;
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -43,6 +44,7 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -59,6 +61,7 @@ public class DataSeeder implements CommandLineRunner {
     private final VehicleBrandRepository vehicleBrandRepository;
     private final VehicleModelRepository vehicleModelRepository;
     private final BookingRepository bookingRepository;
+    private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final PasswordEncoder passwordEncoder;
     private final String adminPhone;
@@ -83,6 +86,7 @@ public class DataSeeder implements CommandLineRunner {
             VehicleBrandRepository vehicleBrandRepository,
             VehicleModelRepository vehicleModelRepository,
             BookingRepository bookingRepository,
+            JdbcTemplate jdbcTemplate,
             PasswordEncoder passwordEncoder,
             @Value("${app.admin.seed-phone}") String adminPhone,
             @Value("${app.admin.seed-password}") String adminPassword,
@@ -104,6 +108,7 @@ public class DataSeeder implements CommandLineRunner {
         this.vehicleBrandRepository = vehicleBrandRepository;
         this.vehicleModelRepository = vehicleModelRepository;
         this.bookingRepository = bookingRepository;
+        this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = new ObjectMapper();
         this.passwordEncoder = passwordEncoder;
         this.adminPhone = adminPhone;
@@ -384,7 +389,7 @@ public class DataSeeder implements CommandLineRunner {
         return vehicleRepository.save(vehicle);
     }
 
-    private Booking createDemoBookingIfMissing(
+    Booking createDemoBookingIfMissing(
             String marker,
             User customer,
             Vehicle vehicle,
@@ -394,11 +399,36 @@ public class DataSeeder implements CommandLineRunner {
             BookingStatus status,
             BookingPaymentStatus paymentStatus,
             LocalDateTime completedAt) {
-        return bookingRepository.findAll().stream()
-                .filter(booking -> marker.equals(booking.getNote()))
+        Booking booking = bookingRepository.findAll().stream()
+                .filter(existingBooking -> marker.equals(existingBooking.getNote()))
                 .findFirst()
                 .orElseGet(() -> createDemoBooking(
                         marker, customer, vehicle, staff, services, scheduledAt, status, paymentStatus, completedAt));
+        correctDemoBookingAuditTimestamps(booking);
+        return booking;
+    }
+
+    void correctDemoBookingAuditTimestamps(Booking booking) {
+        LocalDateTime createdAt = booking.getScheduledAt().minusDays(2);
+        for (LocalDateTime lifecycleAt :
+                new LocalDateTime[] {booking.getPaidAt(), booking.getCheckInAt(), booking.getCompletedAt()}) {
+            if (lifecycleAt != null && createdAt.isAfter(lifecycleAt)) {
+                createdAt = lifecycleAt.minusMinutes(1);
+            }
+        }
+        if (!createdAt.isBefore(booking.getScheduledAt())) {
+            createdAt = booking.getScheduledAt().minusMinutes(1);
+        }
+
+        LocalDateTime updatedAt = booking.getStatus() == BookingStatus.COMPLETED
+                        && booking.getCompletedAt() != null
+                ? booking.getCompletedAt()
+                : createdAt;
+        jdbcTemplate.update(
+                "UPDATE bookings SET created_at = ?, updated_at = ? WHERE id = ?",
+                Timestamp.valueOf(createdAt),
+                Timestamp.valueOf(updatedAt),
+                booking.getId());
     }
 
     private Booking createDemoBooking(

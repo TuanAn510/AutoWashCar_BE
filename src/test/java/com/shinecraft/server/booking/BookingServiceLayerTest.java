@@ -954,7 +954,7 @@ class BookingServiceLayerTest {
         Promotion promotion = new Promotion();
         promotion.setUsedCount(1);
         staleUnpaid.setPromotion(promotion);
-        RewardRedemption redemption = usedRedemption(now.plusDays(1));
+        RewardRedemption redemption = usedRedemption(LocalDateTime.now().plusDays(1));
         staleUnpaid.setRewardRedemption(redemption);
         Booking stalePaid = bookingWithStatus(BookingStatus.PENDING);
         stalePaid.setId(101L);
