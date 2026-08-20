@@ -698,10 +698,7 @@ public class BookingServiceLayer {
         booking.setPaymentStatus(status);
         booking.setPaymentGatewayRef(gatewayRef);
         booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
-        // Paid by card => mark as paid immediately AND award loyalty points right away,
-        // without waiting for the appointment to be completed.
         if (status == BookingPaymentStatus.PAID) {
-            awardPointsForBooking(booking);
             if (booking.getStatus() == BookingStatus.CANCELLED
                     && booking.getCancellationReason() == BookingCancellationReason.STORE_NOT_CONFIRMED) {
                 booking.setRefundRequired(true);
@@ -717,8 +714,7 @@ public class BookingServiceLayer {
     }
 
     /**
-     * Awards loyalty points for a booking, if not already awarded. Shared by the
-     * completion flow (COMPLETED status) and the card-payment flow (paid via card).
+     * Awards loyalty points for a completed booking, if not already awarded.
      * Guarded by earnedPoints so points are never awarded twice for the same booking.
      */
     private void awardPointsForBooking(Booking booking) {
@@ -797,8 +793,10 @@ public class BookingServiceLayer {
         User actor = authService.currentUser();
         requireAdmin(actor);
         String beforeValue = bookingAuditValue(booking);
-        if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
+        if (booking.getStatus() != BookingStatus.PENDING) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Chỉ có thể đổi lịch khi lịch hẹn đang chờ xác nhận.");
         }
         validateMinimumLeadTime(request.scheduledAt());
         validateBookableStartTime(request.scheduledAt());
