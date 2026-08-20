@@ -123,13 +123,19 @@ public final class BookingDtos {
     public record RescheduleRequest(@NotNull @Future LocalDateTime scheduledAt) {}
 
     public record BookingServiceResponse(
-            Long serviceId, String serviceName, BigDecimal price, Integer durationMinutes, Integer rewardPoints) {
+            Long serviceId,
+            String serviceName,
+            BigDecimal price,
+            Integer durationMinutes,
+            BigDecimal rewardMultiplier,
+            Integer rewardPoints) {
         public static BookingServiceResponse from(BookingService service) {
             return new BookingServiceResponse(
                     service.getService().getId(),
                     service.getServiceName(),
                     service.getPrice(),
                     service.getDurationMinutes(),
+                    service.getRewardMultiplier(),
                     service.getRewardPoints());
         }
     }
@@ -217,6 +223,7 @@ public final class BookingDtos {
             String nameSnapshot,
             BigDecimal priceSnapshot,
             Integer estimatedDurationSnapshot,
+            BigDecimal rewardMultiplierSnapshot,
             Integer rewardPointsSnapshot) {}
 
     public record AppointmentStatusHistoryResponse(
@@ -303,6 +310,7 @@ public final class BookingDtos {
                                      service.getServiceName(),
                                      service.getPrice(),
                                      service.getDurationMinutes(),
+                                     service.getRewardMultiplier(),
                                      service.getRewardPoints()))
                             .toList(),
                     booking.getScheduledAt(),

@@ -45,6 +45,9 @@ public class CarWashService extends BaseEntity {
     @Column(nullable = false)
     private Integer rewardPoints = 0;
 
+    @Column(nullable = false, precision = 3, scale = 1)
+    private BigDecimal rewardMultiplier = ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER;
+
     @Column(nullable = false)
     private boolean isActive = true;
 

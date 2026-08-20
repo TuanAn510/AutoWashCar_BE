@@ -138,6 +138,18 @@ public class CatalogService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Service price is required");
         }
 
+        BigDecimal rewardMultiplier = request.rewardMultiplier() == null
+                ? service.getRewardMultiplier()
+                : request.rewardMultiplier();
+        if (rewardMultiplier == null) {
+            rewardMultiplier = ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER;
+        }
+        if (!ServiceRewardPointsPolicy.isSupportedMultiplier(rewardMultiplier)) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Reward multiplier must be a whole number between 1 and 5");
+        }
+
         Integer duration = request.resolvedDuration() == null
                 ? service.getDurationMinutes()
                 : request.resolvedDuration();
@@ -164,7 +176,8 @@ public class CatalogService {
         }
         service.setPrice(price);
         service.setDurationMinutes(duration);
-        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(price));
+        service.setRewardMultiplier(rewardMultiplier);
+        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(price, rewardMultiplier));
         service.setActive(active);
     }
 }

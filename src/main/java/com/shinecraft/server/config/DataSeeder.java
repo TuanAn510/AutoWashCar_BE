@@ -233,7 +233,9 @@ public class DataSeeder implements CommandLineRunner {
         BigDecimal servicePrice = new BigDecimal(price);
         service.setPrice(servicePrice);
         service.setDurationMinutes(duration);
-        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(servicePrice));
+        service.setRewardMultiplier(ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER);
+        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(
+                servicePrice, ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER));
         serviceRepository.save(service);
     }
 
@@ -483,6 +485,7 @@ public class DataSeeder implements CommandLineRunner {
         item.setServiceName(service.getName());
         item.setPrice(service.getPrice());
         item.setDurationMinutes(service.getDurationMinutes());
+        item.setRewardMultiplier(service.getRewardMultiplier());
         item.setRewardPoints(service.getRewardPoints());
         booking.addService(item);
     }

@@ -2,6 +2,7 @@ package com.shinecraft.server.catalog;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
@@ -28,6 +29,7 @@ public final class CatalogDtos {
             @Min(1) Integer durationMinutes,
             @Min(1) Integer estimatedDuration,
             @Min(0) Integer rewardPoints,
+            @DecimalMin("1.0") @DecimalMax("5.0") BigDecimal rewardMultiplier,
             Boolean active,
             Boolean isActive,
             @Min(0) Long version) {
@@ -74,6 +76,8 @@ public final class CatalogDtos {
             BigDecimal price,
             Integer durationMinutes,
             Integer estimatedDuration,
+            Integer baseRewardPoints,
+            BigDecimal rewardMultiplier,
             Integer rewardPoints,
             boolean active,
             boolean isActive,
@@ -93,6 +97,8 @@ public final class CatalogDtos {
                     service.getPrice(),
                     service.getDurationMinutes(),
                     service.getDurationMinutes(),
+                    ServiceRewardPointsPolicy.calculateBase(service.getPrice()),
+                    service.getRewardMultiplier(),
                     service.getRewardPoints(),
                     service.isActive(),
                     service.isActive(),

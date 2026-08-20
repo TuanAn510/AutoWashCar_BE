@@ -13,5 +13,11 @@ class ServiceRewardPointsPolicyTest {
         assertThat(ServiceRewardPointsPolicy.calculate(BigDecimal.valueOf(10_000))).isEqualTo(1);
         assertThat(ServiceRewardPointsPolicy.calculate(BigDecimal.valueOf(19_999))).isEqualTo(1);
         assertThat(ServiceRewardPointsPolicy.calculate(BigDecimal.valueOf(850_000))).isEqualTo(85);
+        assertThat(ServiceRewardPointsPolicy.calculate(BigDecimal.valueOf(850_000), new BigDecimal("1.5")))
+                .isEqualTo(127);
+        assertThat(ServiceRewardPointsPolicy.calculate(BigDecimal.valueOf(850_000), new BigDecimal("2.0")))
+                .isEqualTo(170);
+        assertThat(ServiceRewardPointsPolicy.isSupportedMultiplier(new BigDecimal("2.0"))).isTrue();
+        assertThat(ServiceRewardPointsPolicy.isSupportedMultiplier(new BigDecimal("1.5"))).isFalse();
     }
 }

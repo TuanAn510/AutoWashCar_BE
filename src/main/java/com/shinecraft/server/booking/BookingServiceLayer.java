@@ -728,8 +728,8 @@ public class BookingServiceLayer {
         }
 
         int points = booking.getServices().stream()
-                .map(BookingService::getPrice)
-                .mapToInt(ServiceRewardPointsPolicy::calculate)
+                .mapToInt(service -> ServiceRewardPointsPolicy.calculate(
+                        service.getPrice(), resolvedRewardMultiplier(service.getRewardMultiplier())))
                 .sum();
 
         booking.setEarnedPoints(points);
@@ -1351,15 +1351,18 @@ public class BookingServiceLayer {
         item.setServiceName(service.getName());
         item.setPrice(price);
         item.setDurationMinutes(service.getDurationMinutes());
+        item.setRewardMultiplier(resolvedRewardMultiplier(service.getRewardMultiplier()));
         item.setRewardPoints(Math.max(0, rewardPoints));
         booking.addService(item);
     }
 
     private int resolvedServiceRewardPoints(CarWashService service) {
-        if (service.getRewardPoints() != null) {
-            return Math.max(0, service.getRewardPoints());
-        }
-        return ServiceRewardPointsPolicy.calculate(service.getPrice());
+        return ServiceRewardPointsPolicy.calculate(
+                service.getPrice(), resolvedRewardMultiplier(service.getRewardMultiplier()));
+    }
+
+    private BigDecimal resolvedRewardMultiplier(BigDecimal multiplier) {
+        return multiplier == null ? ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER : multiplier;
     }
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {

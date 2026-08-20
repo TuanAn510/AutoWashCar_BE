@@ -75,6 +75,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -143,6 +144,17 @@ class ApplicationFlowIntegrationTests {
     @Autowired
     private AuditLogRepository auditLogRepository;
 
+    @BeforeEach
+    void keepIntegrationSlotsInsideTheTestBookingWindow() {
+        tierRepository.findByIsActiveTrueOrderByMinPointsAsc().stream()
+                .filter(tier -> tier.getMinPoints() == 0)
+                .findFirst()
+                .ifPresent(tier -> {
+                    tier.setBookingWindowDays(30);
+                    tierRepository.save(tier);
+                });
+    }
+
     @AfterEach
     void resetBookingRepositorySpy() {
         reset(bookingRepository);
@@ -174,6 +186,8 @@ class ApplicationFlowIntegrationTests {
                                 }
                                 """.formatted(categoryId, serviceName)))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.baseRewardPoints", is(25)))
+                .andExpect(jsonPath("$.data.rewardMultiplier", is(1.0)))
                 .andExpect(jsonPath("$.data.rewardPoints", is(25)))
                 .andExpect(jsonPath("$.data.version", is(0)))
                 .andReturn();
@@ -198,11 +212,21 @@ class ApplicationFlowIntegrationTests {
                         .header("Authorization", bearer(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"price": 410000, "rewardPoints": 99, "version": 0}
+                                {"price": 410000, "rewardMultiplier": 2, "rewardPoints": 99, "version": 0}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.rewardPoints", is(41)))
+                .andExpect(jsonPath("$.data.baseRewardPoints", is(41)))
+                .andExpect(jsonPath("$.data.rewardMultiplier", is(2)))
+                .andExpect(jsonPath("$.data.rewardPoints", is(82)))
                 .andExpect(jsonPath("$.data.version", is(1)));
+
+        mockMvc.perform(patch("/api/services/{id}", serviceId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"rewardMultiplier": 1.5, "version": 1}
+                                """))
+                .andExpect(status().isBadRequest());
 
         mockMvc.perform(patch("/api/services/{id}", serviceId)
                         .header("Authorization", bearer(adminToken))
@@ -214,7 +238,8 @@ class ApplicationFlowIntegrationTests {
 
         mockMvc.perform(get("/api/services/active"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[?(@._id == '%s')].rewardPoints".formatted(serviceId), hasItem(41)));
+                .andExpect(jsonPath("$.data[?(@._id == '%s')].rewardMultiplier".formatted(serviceId), hasItem(2.0)))
+                .andExpect(jsonPath("$.data[?(@._id == '%s')].rewardPoints".formatted(serviceId), hasItem(82)));
     }
 
     @Test

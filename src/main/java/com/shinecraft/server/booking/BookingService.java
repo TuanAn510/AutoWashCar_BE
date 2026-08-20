@@ -44,4 +44,7 @@ public class BookingService {
 
     @Column(nullable = false)
     private Integer rewardPoints = 0;
+
+    @Column(nullable = false, precision = 3, scale = 1)
+    private BigDecimal rewardMultiplier = BigDecimal.ONE;
 }
