@@ -29,11 +29,6 @@
 
 @IF "%__MVNW_ARG0_NAME__%"=="" (SET __MVNW_ARG0_NAME__=%~nx0)
 
-@REM Auto-kill process on port 8080 to prevent startup failure
-@FOR /F "tokens=5" %%a IN ('netstat -ano ^| findstr ":8080 "') DO @(
-  taskkill /F /PID %%a >nul 2>&1
-)
-
 @SET __MVNW_CMD__=
 @SET __MVNW_ERROR__=
 @SET __MVNW_PSMODULEP_SAVE=%PSModulePath%
