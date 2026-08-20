@@ -2,6 +2,7 @@ package com.shinecraft.server.catalog;
 
 import com.shinecraft.server.common.ApiException;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -75,8 +76,14 @@ public class CatalogService {
         CarWashService service = serviceRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service not found"));
+        if (request.version() != null && !Objects.equals(request.version(), service.getVersion())) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "Service data has changed. Please reload and try again",
+                    "SERVICE_UPDATE_CONFLICT");
+        }
         apply(service, request);
-        return CatalogDtos.ServiceResponse.from(service);
+        return CatalogDtos.ServiceResponse.from(serviceRepository.saveAndFlush(service));
     }
 
     private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request) {

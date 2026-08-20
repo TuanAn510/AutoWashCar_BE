@@ -30,7 +30,8 @@ public final class CatalogDtos {
             @Min(1) Integer durationMinutes,
             @Min(1) Integer estimatedDuration,
             Boolean active,
-            Boolean isActive) {
+            Boolean isActive,
+            @Min(0) Long version) {
         public Integer resolvedDuration() {
             return estimatedDuration != null ? estimatedDuration : durationMinutes;
         }
@@ -76,6 +77,7 @@ public final class CatalogDtos {
             Integer estimatedDuration,
             boolean active,
             boolean isActive,
+            Long version,
             LocalDateTime createdAt,
             LocalDateTime updatedAt) {
         public static ServiceResponse from(CarWashService service) {
@@ -93,6 +95,7 @@ public final class CatalogDtos {
                     service.getDurationMinutes(),
                     service.isActive(),
                     service.isActive(),
+                    service.getVersion(),
                     service.getCreatedAt(),
                     service.getUpdatedAt());
         }
