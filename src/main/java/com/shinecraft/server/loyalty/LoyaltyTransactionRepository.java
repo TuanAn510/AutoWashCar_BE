@@ -36,7 +36,7 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
             where transaction.customer = :customer
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
               and transaction.status = com.shinecraft.server.loyalty.LoyaltyTransactionStatus.POSTED
-              and transaction.createdAt >= :since
+              and transaction.postedAt >= :since
             """)
     Long sumEarnedPointsSince(@Param("customer") User customer, @Param("since") LocalDateTime since);
 
@@ -46,14 +46,14 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
             where transaction.customer = :customer
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
               and transaction.status = com.shinecraft.server.loyalty.LoyaltyTransactionStatus.POSTED
-              and transaction.createdAt >= :from
-              and transaction.createdAt < :to
+              and transaction.postedAt >= :from
+              and transaction.postedAt < :to
             """)
     Long sumEarnedPointsBetween(
             @Param("customer") User customer, @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 
     @Query("""
-            select max(transaction.createdAt)
+            select max(transaction.postedAt)
             from LoyaltyTransaction transaction
             where transaction.customer = :customer
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
@@ -68,7 +68,7 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
               and transaction.status = com.shinecraft.server.loyalty.LoyaltyTransactionStatus.POSTED
               and transaction.booking is not null
-              and transaction.createdAt >= :since
+              and transaction.postedAt >= :since
             """)
     BigDecimal sumEarnedSpendingSince(@Param("customer") User customer, @Param("since") LocalDateTime since);
 
@@ -78,7 +78,7 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
             where transaction.customer = :customer
               and transaction.type = com.shinecraft.server.loyalty.LoyaltyTransactionType.EARN
               and transaction.status = com.shinecraft.server.loyalty.LoyaltyTransactionStatus.POSTED
-              and transaction.createdAt >= :since
+              and transaction.postedAt >= :since
             """)
     Long countEarnVisitsSince(@Param("customer") User customer, @Param("since") LocalDateTime since);
 }

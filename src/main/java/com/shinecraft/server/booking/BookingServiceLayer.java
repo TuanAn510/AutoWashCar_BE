@@ -3,6 +3,7 @@ package com.shinecraft.server.booking;
 import com.shinecraft.server.audit.AuditTrailService;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
+import com.shinecraft.server.catalog.ServiceRewardPointsPolicy;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
@@ -73,7 +74,6 @@ public class BookingServiceLayer {
     private final VnPayService vnPayService;
     private final FileStorageService fileStorageService;
     private final int shopConcurrentCapacity;
-    private final int pointsAmountUnit;
     private final boolean enforceScheduleTime;
 
     public BookingServiceLayer(
@@ -90,8 +90,7 @@ public class BookingServiceLayer {
             VnPayService vnPayService,
             FileStorageService fileStorageService,
             @Value("${app.booking.shop-concurrent-capacity:2}") int shopConcurrentCapacity,
-            @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime,
-            @Value("${app.loyalty.points-amount-unit:10000}") int pointsAmountUnit) {
+            @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime) {
         this.bookingRepository = bookingRepository;
         this.statusHistoryRepository = statusHistoryRepository;
         this.vehicleRepository = vehicleRepository;
@@ -105,7 +104,6 @@ public class BookingServiceLayer {
         this.vnPayService = vnPayService;
         this.fileStorageService = fileStorageService;
         this.shopConcurrentCapacity = Math.max(1, shopConcurrentCapacity);
-        this.pointsAmountUnit = pointsAmountUnit;
         this.enforceScheduleTime = enforceScheduleTime;
     }
 
@@ -131,7 +129,9 @@ public class BookingServiceLayer {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Exactly one primary service is required");
         }
         List<CarWashService> selectedServices = new ArrayList<>(serviceRepository.findAllById(requestedServiceIds));
-        if (selectedServices.size() != requestedServiceIds.size() || selectedServices.stream().anyMatch(s -> !s.isActive())) {
+        if (selectedServices.size() != requestedServiceIds.size()
+                || selectedServices.stream().anyMatch(service ->
+                        !service.isActive() || !service.getCategory().isActive())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Selected services are invalid");
         }
 
@@ -214,9 +214,10 @@ public class BookingServiceLayer {
         booking.setPromotion(promotion);
         booking.setRewardRedemption(redemption);
         booking.setNote(request.note());
-        selectedServices.forEach(service -> addBookingService(booking, service, service.getPrice()));
+        selectedServices.forEach(service -> addBookingService(
+                booking, service, service.getPrice(), resolvedServiceRewardPoints(service)));
         if (freeAddOnService != null) {
-            addBookingService(booking, freeAddOnService, BigDecimal.ZERO);
+            addBookingService(booking, freeAddOnService, BigDecimal.ZERO, 0);
         }
 
         Booking savedBooking = bookingRepository.save(booking);
@@ -726,16 +727,10 @@ public class BookingServiceLayer {
             return; // already awarded
         }
 
-        int points = booking.getSubtotalAmount()
-                .divide(BigDecimal.valueOf(pointsAmountUnit), 0, RoundingMode.DOWN)
-                .intValue();
-
-        // Double points if booking includes the 850K service (Chăm Sóc Toàn Diện)
-        boolean has850KService = booking.getServices().stream()
-                .anyMatch(bs -> bs.getPrice().compareTo(new BigDecimal("850000")) == 0);
-        if (has850KService) {
-            points = points * 2;
-        }
+        int points = booking.getServices().stream()
+                .map(BookingService::getPrice)
+                .mapToInt(ServiceRewardPointsPolicy::calculate)
+                .sum();
 
         booking.setEarnedPoints(points);
         if (points > 0) {
@@ -1343,19 +1338,28 @@ public class BookingServiceLayer {
 
     private CarWashService requireActiveAddOnService(Reward reward) {
         CarWashService addOn = reward.getAddOnService();
-        if (addOn == null || !addOn.isActive()) {
+        if (addOn == null || !addOn.isActive() || !addOn.getCategory().isActive()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Reward add-on service is not available");
         }
         return addOn;
     }
 
-    private void addBookingService(Booking booking, CarWashService service, BigDecimal price) {
+    private void addBookingService(
+            Booking booking, CarWashService service, BigDecimal price, int rewardPoints) {
         BookingService item = new BookingService();
         item.setService(service);
         item.setServiceName(service.getName());
         item.setPrice(price);
         item.setDurationMinutes(service.getDurationMinutes());
+        item.setRewardPoints(Math.max(0, rewardPoints));
         booking.addService(item);
+    }
+
+    private int resolvedServiceRewardPoints(CarWashService service) {
+        if (service.getRewardPoints() != null) {
+            return Math.max(0, service.getRewardPoints());
+        }
+        return ServiceRewardPointsPolicy.calculate(service.getPrice());
     }
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {

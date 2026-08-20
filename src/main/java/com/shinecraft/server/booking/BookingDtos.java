@@ -122,10 +122,15 @@ public final class BookingDtos {
 
     public record RescheduleRequest(@NotNull @Future LocalDateTime scheduledAt) {}
 
-    public record BookingServiceResponse(Long serviceId, String serviceName, BigDecimal price, Integer durationMinutes) {
+    public record BookingServiceResponse(
+            Long serviceId, String serviceName, BigDecimal price, Integer durationMinutes, Integer rewardPoints) {
         public static BookingServiceResponse from(BookingService service) {
             return new BookingServiceResponse(
-                    service.getService().getId(), service.getServiceName(), service.getPrice(), service.getDurationMinutes());
+                    service.getService().getId(),
+                    service.getServiceName(),
+                    service.getPrice(),
+                    service.getDurationMinutes(),
+                    service.getRewardPoints());
         }
     }
 
@@ -211,7 +216,8 @@ public final class BookingDtos {
             String serviceId,
             String nameSnapshot,
             BigDecimal priceSnapshot,
-            Integer estimatedDurationSnapshot) {}
+            Integer estimatedDurationSnapshot,
+            Integer rewardPointsSnapshot) {}
 
     public record AppointmentStatusHistoryResponse(
             Long id,
@@ -294,9 +300,10 @@ public final class BookingDtos {
                     booking.getServices().stream()
                             .map(service -> new AppointmentServiceSnapshot(
                                     service.getService() == null ? null : String.valueOf(service.getService().getId()),
-                                    service.getServiceName(),
-                                    service.getPrice(),
-                                    service.getDurationMinutes()))
+                                     service.getServiceName(),
+                                     service.getPrice(),
+                                     service.getDurationMinutes(),
+                                     service.getRewardPoints()))
                             .toList(),
                     booking.getScheduledAt(),
                     booking.getNote(),

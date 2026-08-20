@@ -1,0 +1,16 @@
+UPDATE dbo.services
+SET reward_points = CONVERT(INT, FLOOR(price / 10000))
+WHERE reward_points <> CONVERT(INT, FLOOR(price / 10000));
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.check_constraints
+    WHERE parent_object_id = OBJECT_ID('dbo.services')
+      AND name = 'chk_services_reward_points_price_rate'
+)
+BEGIN
+    ALTER TABLE dbo.services WITH CHECK
+        ADD CONSTRAINT chk_services_reward_points_price_rate
+        CHECK (reward_points = CONVERT(INT, FLOOR(price / 10000)));
+END;
+GO

@@ -41,4 +41,7 @@ public class BookingService {
 
     @Column(nullable = false)
     private Integer durationMinutes;
+
+    @Column(nullable = false)
+    private Integer rewardPoints = 0;
 }

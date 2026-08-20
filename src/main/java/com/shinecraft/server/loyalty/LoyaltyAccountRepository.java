@@ -17,7 +17,7 @@ public interface LoyaltyAccountRepository extends JpaRepository<LoyaltyAccount, 
     Optional<LoyaltyAccount> findByCustomerReadOnly(@Param("customer") User customer);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select account from LoyaltyAccount account join fetch account.membershipTier where account.customer = :customer")
+    @Query("select account from LoyaltyAccount account left join fetch account.membershipTier where account.customer = :customer")
     Optional<LoyaltyAccount> findByCustomerForUpdate(@Param("customer") User customer);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)

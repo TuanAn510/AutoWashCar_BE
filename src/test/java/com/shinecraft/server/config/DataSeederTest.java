@@ -16,6 +16,7 @@ import com.shinecraft.server.catalog.ServiceCategoryRepository;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.LoyaltyTransactionRepository;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
+import com.shinecraft.server.loyalty.PointLotRepository;
 import com.shinecraft.server.loyalty.RewardRepository;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
@@ -49,6 +50,7 @@ class DataSeederTest {
                 mock(MembershipTierRepository.class),
                 mock(LoyaltyAccountRepository.class),
                 mock(LoyaltyTransactionRepository.class),
+                mock(PointLotRepository.class),
                 mock(ServiceCategoryRepository.class),
                 mock(CarWashServiceRepository.class),
                 mock(RewardRepository.class),

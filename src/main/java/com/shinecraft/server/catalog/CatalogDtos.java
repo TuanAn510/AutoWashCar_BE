@@ -3,8 +3,6 @@ package com.shinecraft.server.catalog;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -13,7 +11,7 @@ public final class CatalogDtos {
     private CatalogDtos() {}
 
     public record CategoryRequest(
-            @NotBlank @Size(max = 120) String name,
+            @Size(max = 120) String name,
             @Size(max = 1000) String description,
             Boolean active,
             Boolean isActive) {
@@ -23,14 +21,16 @@ public final class CatalogDtos {
     }
 
     public record ServiceRequest(
-            @NotNull Long categoryId,
-            @NotBlank @Size(max = 120) String name,
+            Long categoryId,
+            @Size(max = 120) String name,
             @Size(max = 2000) String description,
-            @NotNull @DecimalMin("0.0") BigDecimal price,
+            @DecimalMin("0.0") BigDecimal price,
             @Min(1) Integer durationMinutes,
             @Min(1) Integer estimatedDuration,
+            @Min(0) Integer rewardPoints,
             Boolean active,
-            Boolean isActive) {
+            Boolean isActive,
+            @Min(0) Long version) {
         public Integer resolvedDuration() {
             return estimatedDuration != null ? estimatedDuration : durationMinutes;
         }
@@ -74,8 +74,10 @@ public final class CatalogDtos {
             BigDecimal price,
             Integer durationMinutes,
             Integer estimatedDuration,
+            Integer rewardPoints,
             boolean active,
             boolean isActive,
+            Long version,
             LocalDateTime createdAt,
             LocalDateTime updatedAt) {
         public static ServiceResponse from(CarWashService service) {
@@ -91,8 +93,10 @@ public final class CatalogDtos {
                     service.getPrice(),
                     service.getDurationMinutes(),
                     service.getDurationMinutes(),
+                    service.getRewardPoints(),
                     service.isActive(),
                     service.isActive(),
+                    service.getVersion(),
                     service.getCreatedAt(),
                     service.getUpdatedAt());
         }
