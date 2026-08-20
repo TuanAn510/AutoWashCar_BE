@@ -10,7 +10,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -44,8 +43,4 @@ public class CarWashService extends BaseEntity {
 
     @Column(nullable = false)
     private boolean isActive = true;
-
-    @Version
-    @Column(nullable = false)
-    private Long version = 0L;
 }
