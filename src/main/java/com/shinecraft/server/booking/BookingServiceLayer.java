@@ -793,8 +793,10 @@ public class BookingServiceLayer {
         User actor = authService.currentUser();
         requireAdmin(actor);
         String beforeValue = bookingAuditValue(booking);
-        if (booking.getStatus() == BookingStatus.COMPLETED || booking.getStatus() == BookingStatus.CANCELLED) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Completed or cancelled appointments cannot be rescheduled");
+        if (booking.getStatus() != BookingStatus.PENDING) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Chỉ có thể đổi lịch khi lịch hẹn đang chờ xác nhận.");
         }
         validateMinimumLeadTime(request.scheduledAt());
         validateBookableStartTime(request.scheduledAt());

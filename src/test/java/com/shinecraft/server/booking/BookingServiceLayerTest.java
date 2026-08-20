@@ -1221,7 +1221,7 @@ class BookingServiceLayerTest {
 
     @Test
     void rescheduleUpdatesScheduledAtWhenSlotIsAvailable() {
-        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
         booking.setScheduledAt(LocalDate.now().plusDays(1).atTime(9, 0));
         BookingService item = new BookingService();
         item.setDurationMinutes(30);
@@ -1235,6 +1235,25 @@ class BookingServiceLayerTest {
 
         assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
         assertThat(response.scheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleRejectsEveryNonPendingStatusBeforeScheduleValidation() {
+        LocalDateTime invalidPastSlot = LocalDate.now().minusDays(1).atTime(7, 59);
+        for (BookingStatus status : List.of(
+                BookingStatus.CONFIRMED,
+                BookingStatus.IN_QUEUE,
+                BookingStatus.IN_PROGRESS,
+                BookingStatus.COMPLETED,
+                BookingStatus.CANCELLED)) {
+            Booking booking = bookingWithStatus(status);
+            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+            assertThatThrownBy(() -> bookingService.reschedule(
+                            99L, new BookingDtos.RescheduleRequest(invalidPastSlot)))
+                    .isInstanceOf(ApiException.class)
+                    .hasMessage("Chỉ có thể đổi lịch khi lịch hẹn đang chờ xác nhận.");
+        }
     }
 
     @Test
@@ -1545,7 +1564,7 @@ class BookingServiceLayerTest {
     }
 
     private Booking reschedulableBooking(LocalDateTime scheduledAt, int durationMinutes) {
-        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
         booking.setScheduledAt(scheduledAt);
         BookingService item = new BookingService();
         item.setDurationMinutes(durationMinutes);

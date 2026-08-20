@@ -1372,6 +1372,25 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void confirmedAppointmentCannotBeRescheduledThroughApi() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long bookingId = createBooking(customer, null, nextSlot());
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+
+        mockMvc.perform(patch("/api/appointments/{id}/reschedule", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "scheduledAt": "%s"
+                                }
+                                """
+                                .formatted(nextSlot())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void legacyPendingBookingEarningPostsOnCompletionWithoutCreatingADuplicate() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();
