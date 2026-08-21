@@ -450,7 +450,8 @@ public class BookingServiceLayer {
                             reservationDurationMinutes,
                             effectiveCapacity,
                             vehicle != null);
-                    return new BookingDtos.SlotResponse(slot, reason == null, reason);
+                    return new BookingDtos.SlotResponse(
+                            slot, endAt(slot, reservationDurationMinutes), reason == null, reason);
                 })
                 .toList();
         return new BookingDtos.AvailabilityResponse(date.toString(), bookingWindowDays, slots, null);
@@ -809,6 +810,50 @@ public class BookingServiceLayer {
         return BookingDtos.AppointmentResponse.from(booking);
     }
 
+    @Transactional(readOnly = true)
+    public BookingDtos.AvailabilityResponse rescheduleAvailability(Long bookingId, LocalDate date) {
+        Booking booking = findBooking(bookingId);
+        requireAdmin(authService.currentUser());
+        if (booking.getStatus() != BookingStatus.PENDING) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Chá»‰ cÃ³ thá»ƒ Ä‘á»•i lá»‹ch khi lá»‹ch háº¹n Ä‘ang chá» xÃ¡c nháº­n.");
+        }
+
+        int reservationDurationMinutes = totalDuration(booking);
+        List<Booking> activeBookings = bookingRepository
+                .findByScheduledAtBetweenOrderByScheduledAtAsc(
+                        date.atStartOfDay(), date.plusDays(1).atStartOfDay())
+                .stream()
+                .filter(candidate -> OCCUPIED_STATUSES.contains(candidate.getStatus()))
+                .filter(candidate -> !bookingId.equals(candidate.getId()))
+                .toList();
+        List<Booking> activeVehicleBookings = bookingRepository
+                .findByVehicleAndStatusInOrderByScheduledAtAsc(booking.getVehicle(), OCCUPIED_STATUSES)
+                .stream()
+                .filter(candidate -> !bookingId.equals(candidate.getId()))
+                .toList();
+        int effectiveCapacity = effectiveShopCapacity();
+        LocalDateTime latestStartAt = date.atTime(CLOSE_TIME).minusMinutes(reservationDurationMinutes);
+        List<BookingDtos.SlotResponse> slots = Stream.iterate(
+                        date.atTime(OPEN_TIME), time -> time.plusMinutes(AVAILABILITY_SUGGESTION_MINUTES))
+                .takeWhile(slot -> !slot.isAfter(latestStartAt))
+                .map(slot -> {
+                    String reason = slotReason(
+                            slot,
+                            null,
+                            activeBookings,
+                            activeVehicleBookings,
+                            reservationDurationMinutes,
+                            effectiveCapacity,
+                            true);
+                    return new BookingDtos.SlotResponse(
+                            slot, endAt(slot, reservationDurationMinutes), reason == null, reason);
+                })
+                .toList();
+        return new BookingDtos.AvailabilityResponse(date.toString(), null, slots, null);
+    }
+
     private void validateStatusTransition(BookingStatus currentStatus, BookingStatus requestedStatus) {
         if (!ALLOWED_STATUS_TRANSITIONS.getOrDefault(currentStatus, Set.of()).contains(requestedStatus)) {
             throw new ApiException(
@@ -1017,7 +1062,7 @@ public class BookingServiceLayer {
 
     private String slotReason(
             LocalDateTime slot,
-            int bookingWindowDays,
+            Integer bookingWindowDays,
             List<Booking> activeBookings,
             List<Booking> activeVehicleBookings,
             int reservationDurationMinutes,
@@ -1031,7 +1076,7 @@ public class BookingServiceLayer {
         if (slot.isBefore(now.plusMinutes(MINIMUM_LEAD_TIME_MINUTES))) {
             return "LEAD_TIME";
         }
-        if (slot.isAfter(now.plusDays(bookingWindowDays))) {
+        if (bookingWindowDays != null && slot.isAfter(now.plusDays(bookingWindowDays))) {
             return "OUT_OF_TIER_WINDOW";
         }
         if (slotEndAt.isAfter(slot.toLocalDate().atTime(CLOSE_TIME))) {

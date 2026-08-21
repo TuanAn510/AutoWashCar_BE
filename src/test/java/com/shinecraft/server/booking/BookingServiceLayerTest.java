@@ -116,6 +116,7 @@ class BookingServiceLayerTest {
                         date.atTime(8, 15),
                         date.atTime(8, 20));
         assertSlot(response, date, LocalTime.of(16, 30), true, null);
+        assertThat(response.slots().get(0).endAt()).isEqualTo(date.atTime(8, 30));
         assertThat(response.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 35)));
     }
 
@@ -128,6 +129,7 @@ class BookingServiceLayerTest {
         when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(45)));
         BookingDtos.AvailabilityResponse fortyFiveMinutes = bookingService.availability(date, 1L, 1L, null);
         assertSlot(fortyFiveMinutes, date, LocalTime.of(16, 15), true, null);
+        assertThat(fortyFiveMinutes.slots().get(1).endAt()).isEqualTo(date.atTime(8, 50));
         assertThat(fortyFiveMinutes.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 20)));
 
         when(serviceRepository.findById(1L)).thenReturn(java.util.Optional.of(serviceWithDuration(90)));
@@ -158,6 +160,7 @@ class BookingServiceLayerTest {
         BookingDtos.AvailabilityResponse response = bookingService.availability(date, 1L, 1L, 10L);
 
         assertSlot(response, date, LocalTime.of(16, 0), true, null);
+        assertThat(response.slots().get(2).endAt()).isEqualTo(date.atTime(9, 10));
         assertThat(response.slots()).noneMatch(slot -> slot.startAt().toLocalTime().equals(LocalTime.of(16, 5)));
     }
 
@@ -1384,6 +1387,89 @@ class BookingServiceLayerTest {
         bookingService.reschedule(99L, new BookingDtos.RescheduleRequest(newSlot));
 
         assertThat(booking.getScheduledAt()).isEqualTo(newSlot);
+    }
+
+    @Test
+    void rescheduleAvailabilityUsesExactPersistedDurationAndExcludesCurrentBooking() {
+        LocalDate date = LocalDate.now().plusDays(8);
+        Booking booking = reschedulableBooking(date.atTime(9, 0), 45);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(booking));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(booking));
+
+        BookingDtos.AvailabilityResponse response = bookingService.rescheduleAvailability(99L, date);
+
+        assertThat(response.bookingWindowDays()).isNull();
+        assertThat(response.slots().get(0).startAt()).isEqualTo(date.atTime(8, 0));
+        assertThat(response.slots().get(0).endAt()).isEqualTo(date.atTime(8, 45));
+        assertThat(response.slots().get(0).available()).isTrue();
+        assertThat(response.slots().get(1).startAt()).isEqualTo(date.atTime(8, 5));
+        assertSlot(response, date, LocalTime.of(9, 0), true, null);
+        assertThat(response.slots().get(response.slots().size() - 1).startAt())
+                .isEqualTo(date.atTime(16, 15));
+    }
+
+    @Test
+    void rescheduleAvailabilityIncludesPersistedAddOnDuration() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Booking booking = reschedulableBooking(date.atTime(9, 0), 45);
+        BookingService addOn = new BookingService();
+        addOn.setDurationMinutes(15);
+        booking.addService(addOn);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        BookingDtos.AvailabilityResponse response = bookingService.rescheduleAvailability(99L, date);
+
+        BookingDtos.SlotResponse last = response.slots().get(response.slots().size() - 1);
+        assertThat(last.startAt()).isEqualTo(date.atTime(16, 0));
+        assertThat(last.endAt()).isEqualTo(date.atTime(17, 0));
+    }
+
+    @Test
+    void rescheduleAvailabilityReportsVehicleOverlapCapacityAndNoStaffUsingSharedRules() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Booking booking = reschedulableBooking(date.atTime(8, 0), 30);
+        Booking sameVehicle = bookingAt(date, LocalTime.of(9, 0), BookingStatus.CONFIRMED, 30);
+        sameVehicle.setId(100L);
+        sameVehicle.setVehicle(booking.getVehicle());
+        Booking otherVehicle = bookingAt(date, LocalTime.of(10, 0), BookingStatus.CONFIRMED, 30);
+        otherVehicle.setId(101L);
+        Booking secondOtherVehicle = bookingAt(date, LocalTime.of(10, 0), BookingStatus.IN_PROGRESS, 30);
+        secondOtherVehicle.setId(102L);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(booking, sameVehicle));
+        when(bookingRepository.findByScheduledAtBetweenOrderByScheduledAtAsc(any(), any()))
+                .thenReturn(List.of(booking, sameVehicle, otherVehicle, secondOtherVehicle));
+
+        BookingDtos.AvailabilityResponse response = bookingService.rescheduleAvailability(99L, date);
+
+        assertSlot(response, date, LocalTime.of(9, 0), false, "VEHICLE_OVERLAP");
+        assertSlot(response, date, LocalTime.of(10, 0), false, "CAPACITY_FULL");
+
+        when(userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_STAFF)).thenReturn(List.of());
+        BookingDtos.AvailabilityResponse withoutStaff = bookingService.rescheduleAvailability(99L, date);
+        assertSlot(withoutStaff, date, LocalTime.of(8, 0), false, "NO_STAFF");
+    }
+
+    @Test
+    void rescheduleAvailabilityRequiresAdminAndPendingBooking() {
+        LocalDate date = LocalDate.now().plusDays(1);
+        Booking booking = reschedulableBooking(date.atTime(9, 0), 30);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+
+        assertThatThrownBy(() -> bookingService.rescheduleAvailability(99L, date))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Admin permission is required");
+
+        customer.setRole(UserRole.ROLE_ADMIN);
+        booking.setStatus(BookingStatus.CONFIRMED);
+        assertThatThrownBy(() -> bookingService.rescheduleAvailability(99L, date))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Chá»‰ cÃ³ thá»ƒ Ä‘á»•i lá»‹ch khi lá»‹ch háº¹n Ä‘ang chá» xÃ¡c nháº­n.");
     }
 
     @Test
