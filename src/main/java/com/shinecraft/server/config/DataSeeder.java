@@ -12,12 +12,15 @@ import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.catalog.ServiceCategory;
+import com.shinecraft.server.catalog.ServiceRewardPointsPolicy;
 import com.shinecraft.server.catalog.ServiceCategoryRepository;
 import com.shinecraft.server.loyalty.LoyaltyTransaction;
 import com.shinecraft.server.loyalty.LoyaltyTransactionRepository;
 import com.shinecraft.server.loyalty.LoyaltyTransactionType;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
+import com.shinecraft.server.loyalty.PointLot;
+import com.shinecraft.server.loyalty.PointLotRepository;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
 import com.shinecraft.server.loyalty.Reward;
@@ -54,6 +57,7 @@ public class DataSeeder implements CommandLineRunner {
     private final MembershipTierRepository tierRepository;
     private final LoyaltyAccountRepository loyaltyAccountRepository;
     private final LoyaltyTransactionRepository loyaltyTransactionRepository;
+    private final PointLotRepository pointLotRepository;
     private final ServiceCategoryRepository categoryRepository;
     private final CarWashServiceRepository serviceRepository;
     private final RewardRepository rewardRepository;
@@ -79,6 +83,7 @@ public class DataSeeder implements CommandLineRunner {
             MembershipTierRepository tierRepository,
             LoyaltyAccountRepository loyaltyAccountRepository,
             LoyaltyTransactionRepository loyaltyTransactionRepository,
+            PointLotRepository pointLotRepository,
             ServiceCategoryRepository categoryRepository,
             CarWashServiceRepository serviceRepository,
             RewardRepository rewardRepository,
@@ -101,6 +106,7 @@ public class DataSeeder implements CommandLineRunner {
         this.tierRepository = tierRepository;
         this.loyaltyAccountRepository = loyaltyAccountRepository;
         this.loyaltyTransactionRepository = loyaltyTransactionRepository;
+        this.pointLotRepository = pointLotRepository;
         this.categoryRepository = categoryRepository;
         this.serviceRepository = serviceRepository;
         this.rewardRepository = rewardRepository;
@@ -224,8 +230,12 @@ public class DataSeeder implements CommandLineRunner {
         service.setCategory(category);
         service.setName(name);
         service.setDescription(description);
-        service.setPrice(new BigDecimal(price));
+        BigDecimal servicePrice = new BigDecimal(price);
+        service.setPrice(servicePrice);
         service.setDurationMinutes(duration);
+        service.setRewardMultiplier(ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER);
+        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(
+                servicePrice, ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER));
         serviceRepository.save(service);
     }
 
@@ -458,7 +468,12 @@ public class DataSeeder implements CommandLineRunner {
         booking.setPaymentStatus(paymentStatus);
         booking.setPaidAt(paymentStatus == BookingPaymentStatus.PAID ? completedAt : null);
         booking.setCompletedAt(completedAt);
-        booking.setEarnedPoints(status == BookingStatus.COMPLETED ? subtotal.divide(BigDecimal.valueOf(10000)).intValue() : 0);
+        int earnedPoints = services.stream()
+                .map(CarWashService::getRewardPoints)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+        booking.setEarnedPoints(status == BookingStatus.COMPLETED ? earnedPoints : 0);
         booking.setNote(marker);
         services.forEach(service -> addDemoBookingService(booking, service));
         return bookingRepository.save(booking);
@@ -470,6 +485,8 @@ public class DataSeeder implements CommandLineRunner {
         item.setServiceName(service.getName());
         item.setPrice(service.getPrice());
         item.setDurationMinutes(service.getDurationMinutes());
+        item.setRewardMultiplier(service.getRewardMultiplier());
+        item.setRewardPoints(service.getRewardPoints());
         booking.addService(item);
     }
 
@@ -486,9 +503,9 @@ public class DataSeeder implements CommandLineRunner {
             account.setVisitCount(Math.max(account.getVisitCount(), 1));
             loyaltyAccountRepository.save(account);
         }
-        String description = "Tích điểm sau khi hoàn thành dịch vụ";
+        String description = "DEMO_LOYALTY_SEED_V1";
         boolean exists = loyaltyTransactionRepository.findByCustomerOrderByCreatedAtDesc(customer).stream()
-                .anyMatch(transaction -> description.equals(transaction.getDescription()));
+                .anyMatch(transaction -> transaction.getType() == LoyaltyTransactionType.EARN);
         if (!exists) {
             LoyaltyTransaction transaction = new LoyaltyTransaction();
             transaction.setCustomer(customer);
@@ -497,7 +514,16 @@ public class DataSeeder implements CommandLineRunner {
             transaction.setPoints(points);
             transaction.setDescription(description);
             transaction.setExpiresAt(LocalDateTime.now().plusMonths(12));
-            loyaltyTransactionRepository.save(transaction);
+            transaction = loyaltyTransactionRepository.save(transaction);
+
+            PointLot lot = new PointLot();
+            lot.setCustomer(customer);
+            lot.setEarnTransaction(transaction);
+            lot.setInitialPoints(points);
+            lot.setRemainingPoints(points);
+            lot.setEarnedAt(LocalDateTime.now());
+            lot.setExpiresAt(transaction.getExpiresAt());
+            pointLotRepository.save(lot);
         }
     }
 }

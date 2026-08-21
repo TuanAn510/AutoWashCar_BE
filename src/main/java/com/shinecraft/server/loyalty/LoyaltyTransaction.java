@@ -57,11 +57,17 @@ public class LoyaltyTransaction {
 
     private LocalDateTime expiresAt;
 
+    private LocalDateTime postedAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @PrePersist
     void prePersist() {
-        createdAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        if (status == LoyaltyTransactionStatus.POSTED && postedAt == null) {
+            postedAt = now;
+        }
     }
 }

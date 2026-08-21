@@ -1,6 +1,7 @@
 package com.shinecraft.server.catalog;
 
 import com.shinecraft.server.common.ApiException;
+import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -11,7 +12,9 @@ public class CatalogService {
     private final ServiceCategoryRepository categoryRepository;
     private final CarWashServiceRepository serviceRepository;
 
-    public CatalogService(ServiceCategoryRepository categoryRepository, CarWashServiceRepository serviceRepository) {
+    public CatalogService(
+            ServiceCategoryRepository categoryRepository,
+            CarWashServiceRepository serviceRepository) {
         this.categoryRepository = categoryRepository;
         this.serviceRepository = serviceRepository;
     }
@@ -32,7 +35,7 @@ public class CatalogService {
 
     @Transactional(readOnly = true)
     public List<CatalogDtos.ServiceResponse> services() {
-        return serviceRepository.findByIsActiveTrueOrderByNameAsc().stream()
+        return serviceRepository.findByIsActiveTrueAndCategory_IsActiveTrueOrderByNameAsc().stream()
                 .map(CatalogDtos.ServiceResponse::from)
                 .toList();
     }
@@ -46,11 +49,12 @@ public class CatalogService {
 
     @Transactional
     public CatalogDtos.CategoryResponse createCategory(CatalogDtos.CategoryRequest request) {
-        if (categoryRepository.existsByNameIgnoreCase(request.name().trim())) {
+        String name = requireCategoryName(request.name(), null);
+        if (categoryRepository.existsByNameIgnoreCase(name)) {
             throw new ApiException(HttpStatus.CONFLICT, "Service category already exists");
         }
         ServiceCategory category = new ServiceCategory();
-        apply(category, request);
+        apply(category, request, name);
         return CatalogDtos.CategoryResponse.from(categoryRepository.save(category));
     }
 
@@ -59,15 +63,24 @@ public class CatalogService {
         ServiceCategory category = categoryRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service category not found"));
-        apply(category, request);
+        String name = requireCategoryName(request.name(), category.getName());
+        if (categoryRepository.existsByNameIgnoreCaseAndIdNot(name, id)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Service category already exists");
+        }
+        boolean deactivateServices = category.isActive() && Boolean.FALSE.equals(request.resolvedActive());
+        apply(category, request, name);
+        if (deactivateServices) {
+            serviceRepository.findByCategoryAndIsActiveTrue(category)
+                    .forEach(service -> service.setActive(false));
+        }
         return CatalogDtos.CategoryResponse.from(category);
     }
 
     @Transactional
     public CatalogDtos.ServiceResponse createService(CatalogDtos.ServiceRequest request) {
         CarWashService service = new CarWashService();
-        apply(service, request);
-        return CatalogDtos.ServiceResponse.from(serviceRepository.save(service));
+        apply(service, request, true);
+        return CatalogDtos.ServiceResponse.from(serviceRepository.saveAndFlush(service));
     }
 
     @Transactional
@@ -75,32 +88,96 @@ public class CatalogService {
         CarWashService service = serviceRepository
                 .findById(id)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service not found"));
-        apply(service, request);
-        return CatalogDtos.ServiceResponse.from(service);
+        if (request.version() != null && !request.version().equals(service.getVersion())) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "Service was updated by another administrator. Refresh and try again");
+        }
+        apply(service, request, false);
+        return CatalogDtos.ServiceResponse.from(serviceRepository.saveAndFlush(service));
     }
 
-    private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request) {
-        category.setName(request.name().trim());
-        category.setDescription(request.description());
+    private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request, String name) {
+        category.setName(name);
+        if (request.description() != null) {
+            category.setDescription(request.description());
+        }
         if (request.resolvedActive() != null) {
             category.setActive(request.resolvedActive());
         }
     }
 
-    private void apply(CarWashService service, CatalogDtos.ServiceRequest request) {
-        ServiceCategory category = categoryRepository
-                .findById(request.categoryId())
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service category not found"));
-        service.setCategory(category);
-        service.setName(request.name().trim());
-        service.setDescription(request.description());
-        service.setPrice(request.price());
-        if (request.resolvedDuration() == null) {
+    private String requireCategoryName(String requestedName, String currentName) {
+        String name = requestedName == null ? currentName : requestedName.trim();
+        if (name == null || name.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Service category name is required");
+        }
+        return name;
+    }
+
+    private void apply(CarWashService service, CatalogDtos.ServiceRequest request, boolean creating) {
+        ServiceCategory category = request.categoryId() == null
+                ? service.getCategory()
+                : categoryRepository
+                        .findById(request.categoryId())
+                        .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Service category not found"));
+        if (category == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Service category is required");
+        }
+
+        String name = request.name() == null ? service.getName() : request.name().trim();
+        if (name == null || name.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Service name is required");
+        }
+        if (name.length() > 120) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Service name must not exceed 120 characters");
+        }
+
+        BigDecimal price = request.price() == null ? service.getPrice() : request.price();
+        if (price == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Service price is required");
+        }
+
+        BigDecimal rewardMultiplier = request.rewardMultiplier() == null
+                ? service.getRewardMultiplier()
+                : request.rewardMultiplier();
+        if (rewardMultiplier == null) {
+            rewardMultiplier = ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER;
+        }
+        if (!ServiceRewardPointsPolicy.isSupportedMultiplier(rewardMultiplier)) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "Reward multiplier must be a whole number between 1 and 5");
+        }
+
+        Integer duration = request.resolvedDuration() == null
+                ? service.getDurationMinutes()
+                : request.resolvedDuration();
+        if (duration == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Estimated duration is required");
         }
-        service.setDurationMinutes(request.resolvedDuration());
-        if (request.resolvedActive() != null) {
-            service.setActive(request.resolvedActive());
+
+        boolean active = request.resolvedActive() == null ? service.isActive() : request.resolvedActive();
+        if (active && !category.isActive()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Active services require an active category");
         }
+
+        boolean duplicate = creating
+                ? serviceRepository.existsByCategoryAndNameIgnoreCase(category, name)
+                : serviceRepository.existsByCategoryAndNameIgnoreCaseAndIdNot(category, name, service.getId());
+        if (duplicate) {
+            throw new ApiException(HttpStatus.CONFLICT, "Service already exists in this category");
+        }
+
+        service.setCategory(category);
+        service.setName(name);
+        if (request.description() != null) {
+            service.setDescription(request.description());
+        }
+        service.setPrice(price);
+        service.setDurationMinutes(duration);
+        service.setRewardMultiplier(rewardMultiplier);
+        service.setRewardPoints(ServiceRewardPointsPolicy.calculate(price, rewardMultiplier));
+        service.setActive(active);
     }
 }

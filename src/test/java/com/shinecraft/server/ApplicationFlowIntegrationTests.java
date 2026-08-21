@@ -30,6 +30,8 @@ import com.shinecraft.server.booking.BookingServiceLayer;
 import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
+import com.shinecraft.server.catalog.ServiceCategory;
+import com.shinecraft.server.catalog.ServiceCategoryRepository;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyAccountRepository;
@@ -73,6 +75,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -101,6 +104,9 @@ class ApplicationFlowIntegrationTests {
 
     @Autowired
     private CarWashServiceRepository serviceRepository;
+
+    @Autowired
+    private ServiceCategoryRepository serviceCategoryRepository;
 
     @Autowired
     private PromotionRepository promotionRepository;
@@ -138,6 +144,17 @@ class ApplicationFlowIntegrationTests {
     @Autowired
     private AuditLogRepository auditLogRepository;
 
+    @BeforeEach
+    void keepIntegrationSlotsInsideTheTestBookingWindow() {
+        tierRepository.findByIsActiveTrueOrderByMinPointsAsc().stream()
+                .filter(tier -> tier.getMinPoints() == 0)
+                .findFirst()
+                .ifPresent(tier -> {
+                    tier.setBookingWindowDays(30);
+                    tierRepository.save(tier);
+                });
+    }
+
     @AfterEach
     void resetBookingRepositorySpy() {
         reset(bookingRepository);
@@ -146,6 +163,140 @@ class ApplicationFlowIntegrationTests {
     @Test
     void authMeRequiresAuthentication() throws Exception {
         mockMvc.perform(get("/api/auth/me")).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void servicePointsFollowPriceAndStaleUpdatesAreRejected() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        Long categoryId = serviceCategoryRepository.findAll().get(0).getId();
+        String serviceName = "Reward points service " + SEQUENCE.getAndIncrement();
+
+        MvcResult createdResult = mockMvc.perform(post("/api/services")
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": %d,
+                                  "name": "%s",
+                                  "price": 250000,
+                                  "estimatedDuration": 45,
+                                  "rewardPoints": 37,
+                                  "isActive": true
+                                }
+                                """.formatted(categoryId, serviceName)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.baseRewardPoints", is(25)))
+                .andExpect(jsonPath("$.data.rewardMultiplier", is(1.0)))
+                .andExpect(jsonPath("$.data.rewardPoints", is(25)))
+                .andExpect(jsonPath("$.data.version", is(0)))
+                .andReturn();
+
+        String serviceId = JsonPath.read(createdResult.getResponse().getContentAsString(), "$.data._id");
+
+        mockMvc.perform(post("/api/services")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": %d,
+                                  "name": "Forbidden customer service",
+                                  "price": 10000,
+                                  "estimatedDuration": 10,
+                                  "rewardPoints": 1
+                                }
+                                """.formatted(categoryId)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(patch("/api/services/{id}", serviceId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price": 410000, "rewardMultiplier": 2, "rewardPoints": 99, "version": 0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.baseRewardPoints", is(41)))
+                .andExpect(jsonPath("$.data.rewardMultiplier", is(2)))
+                .andExpect(jsonPath("$.data.rewardPoints", is(82)))
+                .andExpect(jsonPath("$.data.version", is(1)));
+
+        mockMvc.perform(patch("/api/services/{id}", serviceId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"rewardMultiplier": 1.5, "version": 1}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/services/{id}", serviceId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"price": 990000, "rewardPoints": 1, "version": 0}
+                                """))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/api/services/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@._id == '%s')].rewardMultiplier".formatted(serviceId), hasItem(2.0)))
+                .andExpect(jsonPath("$.data[?(@._id == '%s')].rewardPoints".formatted(serviceId), hasItem(82)));
+    }
+
+    @Test
+    void inactiveCategoryImmediatelyRemovesItsServicesFromCustomerBookingFlow() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+
+        ServiceCategory category = new ServiceCategory();
+        category.setName("Dynamic category " + SEQUENCE.getAndIncrement());
+        category.setActive(true);
+        category = serviceCategoryRepository.saveAndFlush(category);
+
+        CarWashService service = new CarWashService();
+        service.setCategory(category);
+        service.setName("Dynamic service " + SEQUENCE.getAndIncrement());
+        service.setPrice(BigDecimal.valueOf(180000));
+        service.setDurationMinutes(45);
+        service.setRewardPoints(18);
+        service.setActive(true);
+        service = serviceRepository.saveAndFlush(service);
+
+        mockMvc.perform(get("/api/services/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@._id == '%s')]".formatted(service.getId())).isNotEmpty());
+
+        mockMvc.perform(patch("/api/service-categories/{id}", category.getId())
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"isActive": false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name", is(category.getName())))
+                .andExpect(jsonPath("$.data.isActive", is(false)));
+
+        mockMvc.perform(get("/api/services/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@._id == '%s')]".formatted(service.getId())).isEmpty());
+
+        CarWashService deactivatedService = serviceRepository.findById(service.getId()).orElseThrow();
+        assertThat(deactivatedService.isActive()).isFalse();
+        assertThat(deactivatedService.getVersion()).isEqualTo(1L);
+
+        mockMvc.perform(post("/api/bookings")
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "vehicleId": %d,
+                                  "serviceIds": [%d],
+                                  "scheduledAt": "%s"
+                                }
+                                """.formatted(
+                                customer.vehicle().getId(),
+                                service.getId(),
+                                nextSlot().format(JSON_DATE_TIME))))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -843,7 +994,7 @@ class ApplicationFlowIntegrationTests {
                         .header("Authorization", bearer(customer.token()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bookingJson(customer, promotion.getId(), nextSlot())))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.success", is(false)));
 
         assertThat(promotionRepository.findById(promotion.getId()).orElseThrow().getUsedCount()).isZero();
@@ -948,7 +1099,7 @@ class ApplicationFlowIntegrationTests {
                                     .header("Authorization", bearer(customer.token()))
                                     .contentType(MediaType.APPLICATION_JSON)
                                     .content(bookingJson(customer, promotion.getId(), nextSlot())))
-                            .andExpect(status().isInternalServerError());
+                            .andExpect(status().isConflict());
                 } catch (Exception exception) {
                     throw new AssertionError("Booking request should fail after promotion claim", exception);
                 }
@@ -1046,6 +1197,37 @@ class ApplicationFlowIntegrationTests {
         assertThat(account.getCurrentPoints()).isZero();
         assertThat(earn.getPoints()).isEqualTo(10);
         assertThat(pointLotRepository.findById(lot.getId()).orElseThrow().getRemainingPoints()).isZero();
+    }
+
+    @Test
+    void staleExpiredLotIsClosedWithoutConsumingPointsEarnedLater() {
+        CustomerContext customer = registerCustomerUnchecked();
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(100000), 10, "Old points", null);
+        PointLot oldLot = pointLotRepository.findAll().stream()
+                .filter(pointLot -> pointLot.getCustomer().getId().equals(customer.user().getId()))
+                .findFirst()
+                .orElseThrow();
+        oldLot.setExpiresAt(LocalDateTime.now().minusDays(1));
+        pointLotRepository.save(oldLot);
+
+        LoyaltyAccount account = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
+        account.setCurrentPoints(0);
+        loyaltyAccountRepository.save(account);
+        LoyaltyTransaction correction = new LoyaltyTransaction();
+        correction.setCustomer(customer.user());
+        correction.setType(LoyaltyTransactionType.ADJUST);
+        correction.setPoints(-10);
+        correction.setDescription("Balance correction for expiry test");
+        transactionRepository.save(correction);
+
+        assertThat(loyaltyService.expireOldPoints(LocalDateTime.now())).isZero();
+        assertThat(pointLotRepository.findById(oldLot.getId()).orElseThrow().getRemainingPoints()).isZero();
+
+        loyaltyService.earnPoints(customer.user(), BigDecimal.valueOf(50000), 5, "New points", null);
+
+        assertThat(loyaltyService.expireOldPoints(LocalDateTime.now())).isZero();
+        assertThat(loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow().getCurrentPoints())
+                .isEqualTo(5);
     }
 
     @Test
@@ -1278,7 +1460,13 @@ class ApplicationFlowIntegrationTests {
 
         Booking completed = bookingRepository.findById(bookingId).orElseThrow();
         LoyaltyAccount afterCompletion = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
-        assertThat(bookingEarning(bookingId).getStatus()).isEqualTo(LoyaltyTransactionStatus.POSTED);
+        LoyaltyTransaction postedEarning = bookingEarning(bookingId);
+        assertThat(postedEarning.getStatus()).isEqualTo(LoyaltyTransactionStatus.POSTED);
+        assertThat(postedEarning.getPostedAt()).isNotNull();
+        assertThat(postedEarning.getExpiresAt()).isEqualTo(postedEarning.getPostedAt().plusMonths(12));
+        PointLot postedLot = pointLotRepository.findByEarnTransaction(postedEarning).orElseThrow();
+        assertThat(postedLot.getEarnedAt()).isEqualTo(postedEarning.getPostedAt());
+        assertThat(postedLot.getExpiresAt()).isEqualTo(postedEarning.getExpiresAt());
         assertThat(afterCompletion.getCurrentPoints())
                 .isEqualTo(baselineCurrent - postedPointsReward.getRequiredPoints() + completed.getEarnedPoints());
         assertThat(afterCompletion.getLifetimePoints()).isEqualTo(baselineLifetime + completed.getEarnedPoints());

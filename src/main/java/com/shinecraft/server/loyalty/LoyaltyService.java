@@ -155,6 +155,9 @@ public class LoyaltyService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Customer not found"));
         List<LoyaltyTransaction> transactions = transactionRepository
                 .findByCustomerOrderByCreatedAtAsc(customer);
+        transactions.sort(java.util.Comparator
+                .comparing(this::transactionEffectiveAt)
+                .thenComparing(LoyaltyTransaction::getId));
         int running = 0;
         java.util.Map<Long, Integer> balanceByTransactionId = new java.util.LinkedHashMap<>();
         for (LoyaltyTransaction transaction : transactions) {
@@ -165,7 +168,10 @@ public class LoyaltyService {
             balanceByTransactionId.put(transaction.getId(), running);
         }
         return transactions.stream()
-                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .sorted(java.util.Comparator
+                        .comparing(this::transactionEffectiveAt)
+                        .thenComparing(LoyaltyTransaction::getId)
+                        .reversed())
                 .map(transaction -> LoyaltyDtos.TransactionResponse.from(
                         transaction, balanceByTransactionId.get(transaction.getId())))
                 .toList();
@@ -185,6 +191,10 @@ public class LoyaltyService {
     @Transactional(readOnly = true)
     public List<LoyaltyDtos.TransactionResponse> myTransactions() {
         return transactionRepository.findByCustomerOrderByCreatedAtDesc(authService.currentUser()).stream()
+                .sorted(java.util.Comparator
+                        .comparing(this::transactionEffectiveAt)
+                        .thenComparing(LoyaltyTransaction::getId)
+                        .reversed())
                 .map(LoyaltyDtos.TransactionResponse::from)
                 .toList();
     }
@@ -239,7 +249,7 @@ public class LoyaltyService {
     public LoyaltyDtos.RedemptionResponse redeem(Long rewardId) {
         User customer = authService.currentUser();
         Reward reward = rewardRepository
-                .findById(rewardId)
+                .findByIdForUpdate(rewardId)
                 .filter(Reward::isActive)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Reward is not available"));
         LoyaltyAccount account = getOrCreateAccountForUpdate(customer);
@@ -323,7 +333,7 @@ public class LoyaltyService {
 
         // Auto-upgrade tier on every access (handles points earned before upgrade logic existed)
         MembershipTier currentTier = account.getMembershipTier();
-        MembershipTier expectedTier = findTier(account.getLifetimePoints());
+        MembershipTier expectedTier = findTier(currentQuarterEarnedPoints(customer));
         log.info("Auto-upgrade check for customer {}: lifetimePoints={}, currentTier={}, expectedTier={}",
                 customer.getId(), account.getLifetimePoints(),
                 currentTier != null ? currentTier.getName() : "none",
@@ -361,17 +371,13 @@ public class LoyaltyService {
         transaction.setStatus(pending ? LoyaltyTransactionStatus.PENDING : LoyaltyTransactionStatus.POSTED);
         transaction.setPoints(points);
         transaction.setDescription(description);
-        transaction.setExpiresAt(now.plusMonths(pointExpiryMonths));
+        transaction.setPostedAt(pending ? null : now);
+        transaction.setExpiresAt(pending ? null : now.plusMonths(pointExpiryMonths));
         transaction = transactionRepository.save(transaction);
 
-        PointLot lot = new PointLot();
-        lot.setCustomer(customer);
-        lot.setEarnTransaction(transaction);
-        lot.setInitialPoints(points);
-        lot.setRemainingPoints(points);
-        lot.setEarnedAt(now);
-        lot.setExpiresAt(transaction.getExpiresAt());
-        pointLotRepository.save(lot);
+        if (!pending) {
+            savePointLot(transaction, now);
+        }
     }
 
     @Transactional
@@ -379,8 +385,12 @@ public class LoyaltyService {
         transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
                 .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
                 .ifPresent(transaction -> {
+                    LocalDateTime postedAt = LocalDateTime.now();
                     postAccountMetrics(booking.getCustomer(), booking.getFinalAmount(), transaction.getPoints());
                     transaction.setStatus(LoyaltyTransactionStatus.POSTED);
+                    transaction.setPostedAt(postedAt);
+                    transaction.setExpiresAt(postedAt.plusMonths(pointExpiryMonths));
+                    savePointLot(transaction, postedAt);
                 });
     }
 
@@ -388,7 +398,12 @@ public class LoyaltyService {
     public void reversePendingBookingEarning(Booking booking) {
         transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
                 .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
-                .ifPresent(transaction -> transaction.setStatus(LoyaltyTransactionStatus.REVERSED));
+                .ifPresent(transaction -> {
+                    transaction.setStatus(LoyaltyTransactionStatus.REVERSED);
+                    transaction.setPostedAt(null);
+                    transaction.setExpiresAt(null);
+                    pointLotRepository.findByEarnTransaction(transaction).ifPresent(pointLotRepository::delete);
+                });
     }
 
     private void postAccountMetrics(User customer, BigDecimal amount, int points) {
@@ -398,7 +413,7 @@ public class LoyaltyService {
         account.setTotalSpending(account.getTotalSpending().add(amount));
         account.setVisitCount(account.getVisitCount() + 1);
 
-        MembershipTier newTier = findTier(account.getLifetimePoints());
+        MembershipTier newTier = findTier(currentQuarterEarnedPoints(customer) + points);
         MembershipTier currentTier = account.getMembershipTier();
         log.info("Posted {} points for customer {}. Current points: {}, current tier: {}, new tier: {}",
                 points, customer.getId(), account.getCurrentPoints(),
@@ -426,7 +441,9 @@ public class LoyaltyService {
         userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER).forEach(customer -> {
             LoyaltyAccount account = getOrCreateAccountForUpdate(customer);
             MembershipTier tierBefore = account.getMembershipTier();
-            int reviewPoints = Math.toIntExact(transactionRepository.sumEarnedPointsSince(customer, reviewSince));
+            QuarterWindow quarter = currentQuarter(now.toLocalDate());
+            int reviewPoints = Math.toIntExact(transactionRepository.sumEarnedPointsBetween(
+                    customer, quarter.start().atStartOfDay(), quarter.nextStart().atStartOfDay()));
             BigDecimal reviewSpending = transactionRepository.sumEarnedSpendingSince(customer, reviewSince);
             Long reviewVisits = transactionRepository.countEarnVisitsSince(customer, reviewSince);
             MembershipTier tierAfter = findTier(reviewPoints);
@@ -446,6 +463,7 @@ public class LoyaltyService {
         for (PointLot lot : expiredLots) {
             LoyaltyAccount account = getOrCreateAccountForUpdate(lot.getCustomer());
             int expired = Math.min(account.getCurrentPoints(), lot.getRemainingPoints());
+            lot.setRemainingPoints(0);
             if (expired <= 0) {
                 continue;
             }
@@ -456,7 +474,6 @@ public class LoyaltyService {
             transaction.setPoints(-expired);
             transaction.setDescription("Points expired after " + pointExpiryMonths + " months");
             transactionRepository.save(transaction);
-            lot.setRemainingPoints(lot.getRemainingPoints() - expired);
             expiredTotal += expired;
         }
         return expiredTotal;
@@ -478,12 +495,25 @@ public class LoyaltyService {
     }
 
     private LoyaltyAccount getOrCreateAccountForUpdate(User customer) {
-        return accountRepository.findByCustomer(customer).orElseGet(() -> {
+        return accountRepository.findByCustomerForUpdate(customer).orElseGet(() -> {
             LoyaltyAccount account = new LoyaltyAccount();
             account.setCustomer(customer);
             account.setMembershipTier(findTier(0));
             return accountRepository.saveAndFlush(account);
         });
+    }
+
+    private void savePointLot(LoyaltyTransaction transaction, LocalDateTime earnedAt) {
+        PointLot lot = pointLotRepository
+                .findByEarnTransaction(transaction)
+                .orElseGet(PointLot::new);
+        lot.setCustomer(transaction.getCustomer());
+        lot.setEarnTransaction(transaction);
+        lot.setInitialPoints(transaction.getPoints());
+        lot.setRemainingPoints(transaction.getPoints());
+        lot.setEarnedAt(earnedAt);
+        lot.setExpiresAt(transaction.getExpiresAt());
+        pointLotRepository.save(lot);
     }
 
     private LoyaltyDtos.LoyaltyAccountResponse accountResponse(LoyaltyAccount account) {
@@ -506,6 +536,16 @@ public class LoyaltyService {
     private int positivePoints(User customer, LoyaltyTransactionType type) {
         long total = transactionRepository.sumPointsByType(customer, type);
         return Math.toIntExact(Math.abs(total));
+    }
+
+    private LocalDateTime transactionEffectiveAt(LoyaltyTransaction transaction) {
+        return transaction.getPostedAt() == null ? transaction.getCreatedAt() : transaction.getPostedAt();
+    }
+
+    private int currentQuarterEarnedPoints(User customer) {
+        QuarterWindow quarter = currentQuarter(LocalDate.now());
+        return Math.toIntExact(transactionRepository.sumEarnedPointsBetween(
+                customer, quarter.start().atStartOfDay(), quarter.nextStart().atStartOfDay()));
     }
 
     private LoyaltyDtos.RewardResponse rewardResponse(Reward reward) {

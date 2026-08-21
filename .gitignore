@@ -10,6 +10,9 @@ logs/
 *.err.log
 *.dumpstream
 
+### Runtime uploads ###
+uploads/
+
 ### STS ###
 .apt_generated
 .classpath

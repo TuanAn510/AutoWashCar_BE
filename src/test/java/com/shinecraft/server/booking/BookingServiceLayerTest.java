@@ -85,8 +85,7 @@ class BookingServiceLayerTest {
                 mock(VnPayService.class),
                 fileStorageService,
                 2,
-                true,
-                10000);
+                true);
 
         customer = new User();
         customer.setRole(UserRole.ROLE_ADMIN);
@@ -766,6 +765,16 @@ class BookingServiceLayerTest {
     @Test
     void statusAllowsInProgressToCompletedAndPreservesCompletionSideEffects() {
         Booking booking = bookingWithStatus(BookingStatus.IN_PROGRESS);
+        BookingService serviceSnapshot = new BookingService();
+        CarWashService service = new CarWashService();
+        service.setId(1L);
+        serviceSnapshot.setService(service);
+        serviceSnapshot.setServiceName("Configured points service");
+        serviceSnapshot.setDurationMinutes(30);
+        serviceSnapshot.setPrice(BigDecimal.valueOf(10000));
+        serviceSnapshot.setRewardMultiplier(new BigDecimal("2.0"));
+        serviceSnapshot.setRewardPoints(99);
+        booking.addService(serviceSnapshot);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
         BookingDtos.BookingResponse response =
@@ -774,9 +783,9 @@ class BookingServiceLayerTest {
         assertThat(response.status()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getCompletedAt()).isNotNull();
         assertThat(booking.getCompletionImageUrl()).isEqualTo("/uploads/status-evidence.jpg");
-        assertThat(booking.getEarnedPoints()).isEqualTo(1);
+        assertThat(booking.getEarnedPoints()).isEqualTo(2);
         verify(loyaltyService).earnPoints(
-                customer, BigDecimal.valueOf(10000), 1, "Earned points from booking #99", booking);
+                customer, BigDecimal.valueOf(10000), 2, "Earned points from booking #99", booking);
         verify(loyaltyService).postPendingBookingEarning(booking);
     }
 
