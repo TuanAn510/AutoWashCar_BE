@@ -74,7 +74,7 @@ public class ReportService {
         List<LoyaltyTransaction> transactions = transactionRepository.findAll();
         LocalDateTime now = LocalDateTime.now();
         List<Booking> completedBookings = bookings.stream().filter(this::isCompleted).toList();
-        List<Booking> paidBookings = bookings.stream().filter(this::isPaid).toList();
+        List<Booking> paidBookings = bookings.stream().filter(this::isRealizedRevenue).toList();
         return new ReportDtos.DashboardResponse(
                 userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER).size(),
                 vehicleRepository.findAll().stream().filter(Vehicle::isActive).count(),
@@ -301,7 +301,7 @@ public class ReportService {
 
     private List<Booking> paidBookingsInReportRange(ReportDtos.ReportRange range) {
         return bookingRepository.findAll().stream()
-                .filter(this::isPaid)
+                .filter(this::isRealizedRevenue)
                 .filter(booking -> dateInRange(reportDate(booking), range))
                 .sorted(Comparator.comparing(this::reportDate))
                 .toList();
@@ -326,8 +326,9 @@ public class ReportService {
         return booking.getStatus() == BookingStatus.COMPLETED;
     }
 
-    private boolean isPaid(Booking booking) {
-        return booking.getPaymentStatus() == BookingPaymentStatus.PAID;
+    private boolean isRealizedRevenue(Booking booking) {
+        return booking.getPaymentStatus() == BookingPaymentStatus.PAID
+                && booking.getStatus() != BookingStatus.CANCELLED;
     }
 
     private LocalDateTime reportDate(Booking booking) {
