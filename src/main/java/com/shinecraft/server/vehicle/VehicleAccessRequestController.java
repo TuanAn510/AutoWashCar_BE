@@ -6,6 +6,7 @@ import com.shinecraft.server.common.ApiResponse;
 import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.common.LicensePlateNormalizer;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import java.time.LocalDateTime;
@@ -37,6 +38,7 @@ public class VehicleAccessRequestController {
     private final VehicleBrandRepository brandRepository;
     private final VehicleModelRepository modelRepository;
     private final FileStorageService fileStorageService;
+    private final NotificationService notificationService;
 
     public VehicleAccessRequestController(
             AuthService authService,
@@ -45,7 +47,8 @@ public class VehicleAccessRequestController {
             VehicleRepository vehicleRepository,
             VehicleBrandRepository brandRepository,
             VehicleModelRepository modelRepository,
-            FileStorageService fileStorageService) {
+            FileStorageService fileStorageService,
+            NotificationService notificationService) {
         this.authService = authService;
         this.requestRepository = requestRepository;
         this.documentRepository = documentRepository;
@@ -53,6 +56,7 @@ public class VehicleAccessRequestController {
         this.brandRepository = brandRepository;
         this.modelRepository = modelRepository;
         this.fileStorageService = fileStorageService;
+        this.notificationService = notificationService;
     }
 
     @PostMapping(path = "/api/vehicle-access-requests", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -83,6 +87,12 @@ public class VehicleAccessRequestController {
         } else {
             saveDocuments(saved, request.getDocuments(), DOC_TYPE_PLATE);
         }
+        notificationService.notifyAdmins(
+                "VEHICLE_REQUEST_CREATED",
+                "Có yêu cầu xác minh xe",
+                "Khách gửi yêu cầu xác minh xe biển số " + licensePlate + ".",
+                "VEHICLE_REQUEST",
+                saved.getId());
         return ApiResponse.ok(
                 "Vehicle access request created successfully",
                 toResponse(saved));
@@ -140,6 +150,12 @@ public class VehicleAccessRequestController {
             vehicle.setVerificationStatus(VehicleVerificationStatus.PENDING);
             vehicleRepository.save(vehicle);
         }
+        notificationService.notifyAdmins(
+                "VEHICLE_REQUEST_CREATED",
+                "Có yêu cầu xác minh xe",
+                "Khách gửi yêu cầu xác minh xe biển số " + licensePlate + ".",
+                "VEHICLE_REQUEST",
+                saved.getId());
         return ApiResponse.ok("Vehicle brand/model verification resubmitted successfully", toResponse(saved));
     }
 
@@ -201,7 +217,21 @@ public class VehicleAccessRequestController {
             accessRequest.setVehicle(keeper);
         }
 
-        return toResponse(requestRepository.save(accessRequest));
+        VehicleAccessRequest saved = requestRepository.save(accessRequest);
+        notificationService.notify(
+                saved.getRequester(),
+                status == VehicleAccessRequestStatus.APPROVED
+                        ? "VEHICLE_REQUEST_APPROVED"
+                        : "VEHICLE_REQUEST_REJECTED",
+                status == VehicleAccessRequestStatus.APPROVED
+                        ? "Yêu cầu xác minh xe đã được duyệt"
+                        : "Yêu cầu xác minh xe bị từ chối",
+                status == VehicleAccessRequestStatus.APPROVED
+                        ? "Yêu cầu xác minh xe biển số " + saved.getLicensePlate() + " đã được duyệt."
+                        : "Yêu cầu xác minh xe biển số " + saved.getLicensePlate() + " bị từ chối.",
+                "VEHICLE_REQUEST",
+                saved.getId());
+        return toResponse(saved);
     }
 
     /** Tạo xe MỚI nhất (đã xác minh) cho người request từ một yêu cầu truy cập

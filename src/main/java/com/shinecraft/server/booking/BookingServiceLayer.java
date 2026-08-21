@@ -13,6 +13,7 @@ import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
 import com.shinecraft.server.loyalty.RewardType;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.payment.VnPayService;
 import com.shinecraft.server.promotion.DiscountType;
 import com.shinecraft.server.promotion.Promotion;
@@ -73,6 +74,7 @@ public class BookingServiceLayer {
     private final AuditTrailService auditTrailService;
     private final VnPayService vnPayService;
     private final FileStorageService fileStorageService;
+    private final NotificationService notificationService;
     private final int shopConcurrentCapacity;
     private final boolean enforceScheduleTime;
 
@@ -89,6 +91,7 @@ public class BookingServiceLayer {
             AuditTrailService auditTrailService,
             VnPayService vnPayService,
             FileStorageService fileStorageService,
+            NotificationService notificationService,
             @Value("${app.booking.shop-concurrent-capacity:2}") int shopConcurrentCapacity,
             @Value("${app.booking.enforce-schedule-time:true}") boolean enforceScheduleTime) {
         this.bookingRepository = bookingRepository;
@@ -103,6 +106,7 @@ public class BookingServiceLayer {
         this.auditTrailService = auditTrailService;
         this.vnPayService = vnPayService;
         this.fileStorageService = fileStorageService;
+        this.notificationService = notificationService;
         this.shopConcurrentCapacity = Math.max(1, shopConcurrentCapacity);
         this.enforceScheduleTime = enforceScheduleTime;
     }
@@ -233,6 +237,19 @@ public class BookingServiceLayer {
         if (promotion != null) {
             promotionService.recordPromotionUsed(promotion, savedBooking.getCustomer(), savedBooking.getId());
         }
+        notificationService.notifyAdmins(
+                "BOOKING_CREATED",
+                "Có lịch hẹn mới",
+                "Khách " + customer.getFullName() + " vừa đặt lịch mới.",
+                "BOOKING",
+                savedBooking.getId());
+        notificationService.notify(
+                customer,
+                "BOOKING_CREATED",
+                "Đặt lịch thành công",
+                "Lịch hẹn của bạn đã được tạo và đang chờ xác nhận.",
+                "BOOKING",
+                savedBooking.getId());
         return BookingDtos.BookingResponse.from(savedBooking);
     }
 
@@ -587,6 +604,7 @@ public class BookingServiceLayer {
                 beforeValue,
                 bookingAuditValue(booking));
         recordStatusHistory(booking, currentStatus, status, actor, statusEvidenceUrl);
+        notifyStatusChanged(booking, status);
         return BookingDtos.BookingResponse.from(booking);
     }
 
@@ -624,6 +642,20 @@ public class BookingServiceLayer {
                     "BOOKING_AUTO_CANCELLED",
                     beforeValue,
                     bookingAuditValue(booking));
+            notificationService.notify(
+                    booking.getCustomer(),
+                    "BOOKING_AUTO_CANCELLED",
+                    "Lịch hẹn tự động bị hủy",
+                    "Lịch hẹn của bạn đã tự động hủy do quá thời gian xác nhận.",
+                    "BOOKING",
+                    booking.getId());
+            notificationService.notifyAdmins(
+                    "BOOKING_AUTO_CANCELLED",
+                    "Lịch hẹn tự động bị hủy",
+                    "Lịch #" + booking.getId() + " đã tự động hủy do quá thời gian xác nhận.",
+                    "BOOKING",
+                    booking.getId());
+            notifyRefundRequiredIfNeeded(booking);
             expiredCount++;
         }
         return expiredCount;
@@ -705,6 +737,16 @@ public class BookingServiceLayer {
                 booking.setRefundRequired(true);
                 loyaltyService.reversePendingBookingEarning(booking);
             }
+            notifyPaymentSuccess(booking);
+            notifyRefundRequiredIfNeeded(booking);
+        } else if (status == BookingPaymentStatus.CANCELLED) {
+            notificationService.notify(
+                    booking.getCustomer(),
+                    "PAYMENT_FAILED",
+                    "Thanh toán thất bại",
+                    "Thanh toán cho lịch #" + booking.getId() + " không thành công.",
+                    "PAYMENT",
+                    booking.getId());
         }
         auditTrailService.record(
                 null,
@@ -755,6 +797,17 @@ public class BookingServiceLayer {
         booking.setPaymentMethod(method);
         booking.setPaymentStatus(status);
         booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
+        if (status == BookingPaymentStatus.PAID) {
+            notifyPaymentSuccess(booking);
+        } else if (status == BookingPaymentStatus.CANCELLED) {
+            notificationService.notify(
+                    booking.getCustomer(),
+                    "PAYMENT_FAILED",
+                    "Thanh toán thất bại",
+                    "Thanh toán cho lịch #" + booking.getId() + " không thành công.",
+                    "PAYMENT",
+                    booking.getId());
+        }
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -773,6 +826,20 @@ public class BookingServiceLayer {
         List<User> staffs = resolveAssignableStaffs(request);
         booking.setAssignedStaff(staffs.get(0));
         booking.setSecondaryAssignedStaff(staffs.size() > 1 ? staffs.get(1) : null);
+        staffs.forEach(staff -> notificationService.notify(
+                staff,
+                "STAFF_ASSIGNED",
+                "Bạn được phân công lịch mới",
+                "Bạn được phân công xử lý lịch #" + booking.getId() + ".",
+                "BOOKING",
+                booking.getId()));
+        notificationService.notify(
+                booking.getCustomer(),
+                "STAFF_ASSIGNED",
+                "Lịch hẹn đã được phân công",
+                "Gara đã phân công nhân viên xử lý lịch hẹn của bạn.",
+                "BOOKING",
+                booking.getId());
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -800,6 +867,18 @@ public class BookingServiceLayer {
         validateVehicleNoOverlap(booking.getVehicle(), request.scheduledAt(), reservationDurationMinutes, booking.getId());
         validateShopCapacity(request.scheduledAt(), reservationDurationMinutes, booking.getId());
         booking.setScheduledAt(request.scheduledAt());
+        notificationService.notify(
+                booking.getCustomer(),
+                "BOOKING_RESCHEDULED",
+                "Lịch hẹn đã được đổi giờ",
+                "Lịch hẹn #" + booking.getId() + " đã được đổi sang " + request.scheduledAt() + ".",
+                "BOOKING",
+                booking.getId());
+        notifyAssignedStaffs(
+                booking,
+                "BOOKING_RESCHEDULED",
+                "Lịch hẹn đã được đổi giờ",
+                "Lịch #" + booking.getId() + " đã được đổi sang " + request.scheduledAt() + ".");
         auditTrailService.record(
                 actor,
                 booking.getCustomer(),
@@ -1365,6 +1444,96 @@ public class BookingServiceLayer {
 
     private BigDecimal percent(BigDecimal amount, BigDecimal percent) {
         return amount.multiply(percent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+    }
+
+    private void notifyStatusChanged(Booking booking, BookingStatus status) {
+        switch (status) {
+            case CONFIRMED -> notificationService.notify(
+                    booking.getCustomer(),
+                    "BOOKING_CONFIRMED",
+                    "Lịch hẹn đã được xác nhận",
+                    "Lịch hẹn #" + booking.getId() + " của bạn đã được gara xác nhận.",
+                    "BOOKING",
+                    booking.getId());
+            case IN_QUEUE -> {
+                notificationService.notify(
+                        booking.getCustomer(),
+                        "BOOKING_CHECKED_IN",
+                        "Xe đã được tiếp nhận",
+                        "Xe của bạn đã được tiếp nhận và đang chờ xử lý.",
+                        "BOOKING",
+                        booking.getId());
+                notifyAssignedStaffs(
+                        booking,
+                        "BOOKING_CHECKED_IN",
+                        "Xe đã check-in",
+                        "Xe của lịch #" + booking.getId() + " đã check-in.");
+            }
+            case IN_PROGRESS -> notificationService.notify(
+                    booking.getCustomer(),
+                    "BOOKING_IN_PROGRESS",
+                    "Dịch vụ đã bắt đầu",
+                    "Gara đã bắt đầu thực hiện dịch vụ cho lịch #" + booking.getId() + ".",
+                    "BOOKING",
+                    booking.getId());
+            case COMPLETED -> notificationService.notify(
+                    booking.getCustomer(),
+                    "BOOKING_COMPLETED",
+                    "Dịch vụ đã hoàn thành",
+                    "Dịch vụ cho lịch #" + booking.getId() + " đã hoàn thành.",
+                    "BOOKING",
+                    booking.getId());
+            case CANCELLED -> {
+                notificationService.notify(
+                        booking.getCustomer(),
+                        "BOOKING_CANCELLED",
+                        "Lịch hẹn đã bị hủy",
+                        "Lịch hẹn #" + booking.getId() + " đã bị hủy.",
+                        "BOOKING",
+                        booking.getId());
+                notifyAssignedStaffs(
+                        booking,
+                        "BOOKING_CANCELLED",
+                        "Lịch hẹn đã bị hủy",
+                        "Lịch #" + booking.getId() + " đã bị hủy, bạn không cần xử lý nữa.");
+                notifyRefundRequiredIfNeeded(booking);
+            }
+            default -> {
+            }
+        }
+    }
+
+    private void notifyPaymentSuccess(Booking booking) {
+        notificationService.notify(
+                booking.getCustomer(),
+                "PAYMENT_SUCCESS",
+                "Thanh toán thành công",
+                "Thanh toán " + booking.getFinalAmount() + "đ cho lịch #" + booking.getId() + " đã thành công.",
+                "PAYMENT",
+                booking.getId());
+        notificationService.notifyAdmins(
+                "PAYMENT_SUCCESS",
+                "Có thanh toán thành công",
+                "Lịch #" + booking.getId() + " đã được thanh toán " + booking.getFinalAmount() + "đ.",
+                "PAYMENT",
+                booking.getId());
+    }
+
+    private void notifyRefundRequiredIfNeeded(Booking booking) {
+        if (booking.isRefundRequired() || booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            notificationService.notifyAdmins(
+                    "REFUND_REQUIRED",
+                    "Cần xử lý hoàn tiền",
+                    "Lịch #" + booking.getId() + " đã thanh toán nhưng bị hủy, cần kiểm tra hoàn tiền.",
+                    "PAYMENT",
+                    booking.getId());
+        }
+    }
+
+    private void notifyAssignedStaffs(Booking booking, String type, String title, String message) {
+        Stream.of(booking.getAssignedStaff(), booking.getSecondaryAssignedStaff())
+                .filter(staff -> staff != null)
+                .forEach(staff -> notificationService.notify(staff, type, title, message, "BOOKING", booking.getId()));
     }
 
     private String extractTxnRefFromUrl(String url) {
