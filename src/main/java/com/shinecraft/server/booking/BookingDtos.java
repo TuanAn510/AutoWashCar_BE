@@ -59,7 +59,7 @@ public final class BookingDtos {
         }
     }
 
-    public record SlotResponse(LocalDateTime startAt, boolean available, String reason) {}
+    public record SlotResponse(LocalDateTime startAt, LocalDateTime endAt, boolean available, String reason) {}
 
     public record AvailabilityResponse(
             String date, Integer bookingWindowDays, List<SlotResponse> slots, String vehicleAvailabilityReason) {}

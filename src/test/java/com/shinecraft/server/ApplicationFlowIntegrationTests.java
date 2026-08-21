@@ -537,6 +537,23 @@ class ApplicationFlowIntegrationTests {
     }
 
     @Test
+    void adminCanReadPendingBookingRescheduleAvailabilityWithExactEndTimes() throws Exception {
+        CustomerContext customer = registerCustomer();
+        String adminToken = loginAdmin();
+        LocalDateTime scheduledAt = nextSlot();
+        Long bookingId = createBooking(customer, null, scheduledAt);
+
+        mockMvc.perform(get("/api/appointments/{id}/reschedule-availability", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .param("date", scheduledAt.toLocalDate().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bookingWindowDays").doesNotExist())
+                .andExpect(jsonPath("$.data.slots[0].startAt").exists())
+                .andExpect(jsonPath("$.data.slots[0].endAt").exists())
+                .andExpect(jsonPath("$.data.slots[1].startAt").exists());
+    }
+
+    @Test
     void adminReportsReturnLiveConnectedStatistics() throws Exception {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();

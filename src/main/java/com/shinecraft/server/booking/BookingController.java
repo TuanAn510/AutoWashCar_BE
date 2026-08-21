@@ -171,6 +171,15 @@ public class BookingController {
         return ApiResponse.ok("Appointment rescheduled successfully", bookingService.reschedule(id, request));
     }
 
+    @GetMapping("/api/appointments/{id}/reschedule-availability")
+    ApiResponse<BookingDtos.AvailabilityResponse> rescheduleAvailability(
+            @PathVariable Long id,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        return ApiResponse.ok(
+                "Appointment reschedule availability retrieved successfully",
+                bookingService.rescheduleAvailability(id, date));
+    }
+
     @GetMapping("/api/bookings/availability")
     ApiResponse<BookingDtos.AvailabilityResponse> availability(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
