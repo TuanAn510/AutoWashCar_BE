@@ -147,6 +147,60 @@ class ReportServiceTest {
     }
 
     @Test
+    void revenueReportsExcludePaidCancelledRefundBookings() {
+        CarWashService premium = service(12L, "Premium");
+        CarWashService express = service(13L, "Express");
+        Booking firstPaid = booking(1L, BookingStatus.COMPLETED, "2026-02-10T09:00:00", "2026-02-10T10:00:00", "850000");
+        firstPaid.addService(bookingService(premium, "850000"));
+        markPaid(firstPaid, "2026-02-10T10:05:00");
+        Booking secondPaid = booking(2L, BookingStatus.COMPLETED, "2026-02-11T09:00:00", "2026-02-11T10:00:00", "850000");
+        secondPaid.addService(bookingService(premium, "850000"));
+        markPaid(secondPaid, "2026-02-11T10:05:00");
+        Booking paidThenCancelled = booking(3L, BookingStatus.CANCELLED, "2026-02-12T09:00:00", null, "350000");
+        paidThenCancelled.addService(bookingService(express, "350000"));
+        paidThenCancelled.setRefundRequired(true);
+        markPaid(paidThenCancelled, "2026-02-12T10:05:00");
+        ReportDtos.ReportRange february = new ReportDtos.ReportRange(
+                LocalDateTime.parse("2026-02-01T00:00:00"),
+                LocalDateTime.parse("2026-03-01T00:00:00"));
+
+        when(bookingRepository.findAll()).thenReturn(List.of(firstPaid, secondPaid, paidThenCancelled));
+        when(serviceRepository.findAll()).thenReturn(List.of(premium, express));
+        when(userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER)).thenReturn(List.of());
+        when(vehicleRepository.findAll()).thenReturn(List.of());
+        when(promotionRepository.findByIsActiveTrueAndStartAtLessThanEqualAndEndAtGreaterThanEqual(any(), any()))
+                .thenReturn(List.of());
+        when(loyaltyAccountRepository.count()).thenReturn(0L);
+        when(rewardRepository.findByIsActiveTrueOrderByRequiredPointsAsc()).thenReturn(List.of());
+        when(transactionRepository.findAll()).thenReturn(List.of());
+
+        ReportDtos.DashboardResponse dashboard = reportService.dashboard();
+        ReportDtos.RevenueReport revenue = reportService.revenue(february, "monthly");
+        ReportDtos.ServiceReport services = reportService.services(february, 5);
+
+        assertThat(dashboard.revenue()).isEqualByComparingTo("1700000");
+        assertThat(revenue.data()).singleElement().satisfies(item -> {
+            assertThat(item.period()).isEqualTo("2026-02");
+            assertThat(item.revenue()).isEqualByComparingTo("1700000");
+            assertThat(item.completedServicesCount()).isEqualTo(2);
+        });
+        assertThat(services.mostBookedServices())
+                .filteredOn(item -> item.serviceId().equals("12"))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.usageCount()).isEqualTo(2);
+                    assertThat(item.revenue()).isEqualByComparingTo("1700000");
+                });
+        assertThat(services.mostBookedServices())
+                .filteredOn(item -> item.serviceId().equals("13"))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.usageCount()).isZero();
+                    assertThat(item.revenue()).isEqualByComparingTo(BigDecimal.ZERO);
+                });
+    }
+
+    @Test
     void reportsReturnExactValuesForAppointmentsCustomersLoyaltyPromotionsAndVehicles() {
         User activeCustomer = user(1L);
         activeCustomer.setCreatedAt(LocalDateTime.parse("2026-02-03T09:00:00"));
