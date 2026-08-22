@@ -6,6 +6,8 @@ import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
 import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -47,11 +49,17 @@ public class NotificationService {
                 .forEach(admin -> notify(admin, type, title, message, targetType, targetId));
     }
 
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void notifyCustomers(String type, String title, String message, String targetType, Long targetId) {
+        userRepository.findByRoleAndIsActiveTrue(UserRole.ROLE_CUSTOMER)
+                .forEach(customer -> notify(customer, type, title, message, targetType, targetId));
+    }
+
     @Transactional(readOnly = true)
-    public List<NotificationDtos.NotificationResponse> listMine() {
-        return notificationRepository.findByRecipientOrderByCreatedAtDesc(authService.currentUser()).stream()
-                .map(NotificationDtos.NotificationResponse::from)
-                .toList();
+    public Page<NotificationDtos.NotificationResponse> listMinePaged(int page, int size) {
+        return notificationRepository
+                .findByRecipientOrderByCreatedAtDesc(authService.currentUser(), PageRequest.of(page, size))
+                .map(NotificationDtos.NotificationResponse::from);
     }
 
     @Transactional(readOnly = true)
@@ -72,8 +80,7 @@ public class NotificationService {
     @Transactional
     public NotificationDtos.UnreadCountResponse markAllRead() {
         User currentUser = authService.currentUser();
-        notificationRepository.findByRecipientOrderByCreatedAtDesc(currentUser)
-                .forEach(notification -> notification.setRead(true));
+        notificationRepository.markAllReadByRecipient(currentUser);
         return new NotificationDtos.UnreadCountResponse(0);
     }
 }

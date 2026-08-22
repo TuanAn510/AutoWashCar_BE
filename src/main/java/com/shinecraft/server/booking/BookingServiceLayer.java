@@ -24,6 +24,7 @@ import com.shinecraft.server.user.UserRepository;
 import com.shinecraft.server.user.UserRole;
 import com.shinecraft.server.vehicle.Vehicle;
 import com.shinecraft.server.vehicle.VehicleRepository;
+import java.text.NumberFormat;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -33,6 +34,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -1446,6 +1448,12 @@ public class BookingServiceLayer {
         return amount.multiply(percent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
     }
 
+    private String formatVnd(BigDecimal amount) {
+        NumberFormat formatter = NumberFormat.getNumberInstance(Locale.forLanguageTag("vi-VN"));
+        formatter.setMaximumFractionDigits(0);
+        return formatter.format(amount == null ? BigDecimal.ZERO : amount) + " đ";
+    }
+
     private void notifyStatusChanged(Booking booking, BookingStatus status) {
         switch (status) {
             case CONFIRMED -> notificationService.notify(
@@ -1508,23 +1516,26 @@ public class BookingServiceLayer {
                 booking.getCustomer(),
                 "PAYMENT_SUCCESS",
                 "Thanh toán thành công",
-                "Thanh toán " + booking.getFinalAmount() + "đ cho lịch #" + booking.getId() + " đã thành công.",
+                "Thanh toán " + formatVnd(booking.getFinalAmount()) + " cho lịch #" + booking.getId() + " đã thành công.",
                 "PAYMENT",
                 booking.getId());
         notificationService.notifyAdmins(
                 "PAYMENT_SUCCESS",
                 "Có thanh toán thành công",
-                "Lịch #" + booking.getId() + " đã được thanh toán " + booking.getFinalAmount() + "đ.",
+                "Lịch #" + booking.getId() + " đã được thanh toán " + formatVnd(booking.getFinalAmount()) + ".",
                 "PAYMENT",
                 booking.getId());
     }
 
     private void notifyRefundRequiredIfNeeded(Booking booking) {
-        if (booking.isRefundRequired() || booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+        if (booking.isRefundRequired()
+                && booking.getPaymentStatus() == BookingPaymentStatus.PAID
+                && booking.getStatus() == BookingStatus.CANCELLED) {
             notificationService.notifyAdmins(
                     "REFUND_REQUIRED",
                     "Cần xử lý hoàn tiền",
-                    "Lịch #" + booking.getId() + " đã thanh toán nhưng bị hủy, cần kiểm tra hoàn tiền.",
+                    "Lịch #" + booking.getId() + " đã thanh toán " + formatVnd(booking.getFinalAmount())
+                            + " nhưng bị hủy, cần kiểm tra hoàn tiền.",
                     "PAYMENT",
                     booking.getId());
         }

@@ -90,7 +90,7 @@ public class VehicleAccessRequestController {
         notificationService.notifyAdmins(
                 "VEHICLE_REQUEST_CREATED",
                 "Có yêu cầu xác minh xe",
-                "Khách gửi yêu cầu xác minh xe biển số " + licensePlate + ".",
+                "Khách gửi yêu cầu xác minh xe biển số " + LicensePlateNormalizer.display(licensePlate) + ".",
                 "VEHICLE_REQUEST",
                 saved.getId());
         return ApiResponse.ok(
@@ -153,7 +153,7 @@ public class VehicleAccessRequestController {
         notificationService.notifyAdmins(
                 "VEHICLE_REQUEST_CREATED",
                 "Có yêu cầu xác minh xe",
-                "Khách gửi yêu cầu xác minh xe biển số " + licensePlate + ".",
+                "Khách gửi yêu cầu xác minh xe biển số " + LicensePlateNormalizer.display(licensePlate) + ".",
                 "VEHICLE_REQUEST",
                 saved.getId());
         return ApiResponse.ok("Vehicle brand/model verification resubmitted successfully", toResponse(saved));
@@ -227,8 +227,8 @@ public class VehicleAccessRequestController {
                         ? "Yêu cầu xác minh xe đã được duyệt"
                         : "Yêu cầu xác minh xe bị từ chối",
                 status == VehicleAccessRequestStatus.APPROVED
-                        ? "Yêu cầu xác minh xe biển số " + saved.getLicensePlate() + " đã được duyệt."
-                        : "Yêu cầu xác minh xe biển số " + saved.getLicensePlate() + " bị từ chối.",
+                        ? "Yêu cầu xác minh xe biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + " đã được duyệt."
+                        : "Yêu cầu xác minh xe biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + " bị từ chối.",
                 "VEHICLE_REQUEST",
                 saved.getId());
         return toResponse(saved);

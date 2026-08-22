@@ -4,6 +4,7 @@ import com.shinecraft.server.common.ApiException;
 import com.shinecraft.server.common.FileStorageService;
 import com.shinecraft.server.common.LicensePlateNormalizer;
 import com.shinecraft.server.common.PaginationMeta;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRole;
@@ -28,6 +29,7 @@ public class VehicleService {
     private final VehicleBrandRepository brandRepository;
     private final VehicleModelRepository modelRepository;
     private final VehicleAccessRequestRepository accessRequestRepository;
+    private final NotificationService notificationService;
     private final TransactionTemplate requiresNewTx;
 
     public VehicleService(VehicleRepository vehicleRepository,
@@ -37,6 +39,7 @@ public class VehicleService {
             VehicleBrandRepository brandRepository,
             VehicleModelRepository modelRepository,
             VehicleAccessRequestRepository accessRequestRepository,
+            NotificationService notificationService,
             PlatformTransactionManager platformTransactionManager) {
         this.vehicleRepository = vehicleRepository;
         this.vehicleImageRepository = vehicleImageRepository;
@@ -45,6 +48,7 @@ public class VehicleService {
         this.brandRepository = brandRepository;
         this.modelRepository = modelRepository;
         this.accessRequestRepository = accessRequestRepository;
+        this.notificationService = notificationService;
         this.requiresNewTx = new TransactionTemplate(platformTransactionManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -155,6 +159,13 @@ public class VehicleService {
             vehicle.setVerificationStatus(VehicleVerificationStatus.APPROVED);
             Vehicle saved = vehicleRepository.save(vehicle);
             saveImages(saved, files);
+            notificationService.notifyAdmins(
+                    "VEHICLE_CREATED",
+                    "Xe mới được thêm",
+                    "Khách thêm xe " + vehicle.getBrand() + " " + vehicle.getModel()
+                            + " biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + ".",
+                    "VEHICLE",
+                    saved.getId());
             return VehicleDtos.VehicleResponse.from(saved);
         }
 
@@ -164,6 +175,13 @@ public class VehicleService {
             vehicle.setVerificationStatus(VehicleVerificationStatus.APPROVED);
             Vehicle saved = vehicleRepository.save(vehicle);
             saveImages(saved, files);
+            notificationService.notifyAdmins(
+                    "VEHICLE_CREATED",
+                    "Xe mới được thêm",
+                    "Khách thêm xe " + vehicle.getBrand() + " " + vehicle.getModel()
+                            + " biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + ".",
+                    "VEHICLE",
+                    saved.getId());
             return VehicleDtos.VehicleResponse.from(saved);
         }
 
@@ -381,7 +399,13 @@ public class VehicleService {
                 hasText(request.suggestedModelName()) ? request.suggestedModelName().trim() : trim(request.model()));
         accessRequest.setBrandRef(brand);
         accessRequest.setModelRef(model);
-        accessRequestRepository.save(accessRequest);
+        VehicleAccessRequest saved = accessRequestRepository.save(accessRequest);
+        notificationService.notifyAdmins(
+                "VEHICLE_REQUEST_CREATED",
+                "Có yêu cầu xác minh hãng/dòng xe",
+                "Khách gửi yêu cầu xác minh hãng/dòng xe biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + ".",
+                "VEHICLE_REQUEST",
+                saved.getId());
     }
 
     /** Creates a BRAND_MODEL_VERIFICATION request that carries the draft of a
@@ -413,7 +437,13 @@ public class VehicleService {
         accessRequest.setModelRef(model);
         accessRequest.setCarType(carType);
         accessRequest.setManufactureYear(manufactureYear);
-        accessRequestRepository.save(accessRequest);
+        VehicleAccessRequest saved = accessRequestRepository.save(accessRequest);
+        notificationService.notifyAdmins(
+                "VEHICLE_REQUEST_CREATED",
+                "Có yêu cầu xác minh hãng/dòng xe",
+                "Khách gửi yêu cầu xác minh hãng/dòng xe biển số " + LicensePlateNormalizer.display(saved.getLicensePlate()) + ".",
+                "VEHICLE_REQUEST",
+                saved.getId());
     }
 
     private VehicleBrand resolveBrand(Long id) {

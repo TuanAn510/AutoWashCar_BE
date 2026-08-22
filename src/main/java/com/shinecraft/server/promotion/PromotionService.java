@@ -7,10 +7,12 @@ import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.http.HttpStatus;
@@ -24,18 +26,21 @@ public class PromotionService {
     private final MembershipTierRepository tierRepository;
     private final LoyaltyService loyaltyService;
     private final AuthService authService;
+    private final NotificationService notificationService;
 
     public PromotionService(
             PromotionRepository promotionRepository,
             AuditLogRepository auditLogRepository,
             MembershipTierRepository tierRepository,
             LoyaltyService loyaltyService,
-            AuthService authService) {
+            AuthService authService,
+            NotificationService notificationService) {
         this.promotionRepository = promotionRepository;
         this.auditLogRepository = auditLogRepository;
         this.tierRepository = tierRepository;
         this.loyaltyService = loyaltyService;
         this.authService = authService;
+        this.notificationService = notificationService;
     }
 
     @Transactional(readOnly = true)
@@ -102,7 +107,25 @@ public class PromotionService {
         if (request.resolvedActive() != null) {
             promotion.setActive(request.resolvedActive());
         }
-        return PromotionDtos.PromotionResponse.from(promotionRepository.save(promotion));
+        Promotion saved = promotionRepository.save(promotion);
+        // Notify admins about new/updated promotion
+        boolean isNew = id == null;
+        String action = isNew ? "Tạo mới" : "Cập nhật";
+        String discountDesc = saved.getDiscountType() == DiscountType.PERCENTAGE
+                ? saved.getDiscountValue() + "%"
+                : String.format("%,.0fđ", saved.getDiscountValue());
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+        String adminMsg = action + " khuyến mãi \"" + saved.getTitle() + "\" - Giảm " + discountDesc
+                + " từ " + saved.getStartAt().format(fmt) + " đến " + saved.getEndAt().format(fmt) + ".";
+        notificationService.notifyAdmins("PROMOTION", "Khuyến mãi đã " + action.toLowerCase(), adminMsg, "PROMOTION", saved.getId());
+        // Notify all active customers about new promotion
+        if (isNew && Boolean.TRUE.equals(saved.isActive())) {
+            String customerMsg = "Khuyến mãi mới \"" + saved.getTitle() + "\" - Giảm " + discountDesc
+                    + " từ " + saved.getStartAt().format(fmt) + " đến " + saved.getEndAt().format(fmt)
+                    + ". nhanh tay kẻo lỡ!";
+            notificationService.notifyCustomers("PROMOTION", "Khuyến mãi mới!", customerMsg, "PROMOTION", saved.getId());
+        }
+        return PromotionDtos.PromotionResponse.from(saved);
     }
 
     private void validateDiscount(DiscountType discountType, BigDecimal discountValue) {
