@@ -1,6 +1,7 @@
 package com.shinecraft.server.catalog;
 
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.notification.NotificationService;
 import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -11,12 +12,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class CatalogService {
     private final ServiceCategoryRepository categoryRepository;
     private final CarWashServiceRepository serviceRepository;
+    private final NotificationService notificationService;
 
     public CatalogService(
             ServiceCategoryRepository categoryRepository,
-            CarWashServiceRepository serviceRepository) {
+            CarWashServiceRepository serviceRepository,
+            NotificationService notificationService) {
         this.categoryRepository = categoryRepository;
         this.serviceRepository = serviceRepository;
+        this.notificationService = notificationService;
     }
 
     @Transactional(readOnly = true)
@@ -80,7 +84,21 @@ public class CatalogService {
     public CatalogDtos.ServiceResponse createService(CatalogDtos.ServiceRequest request) {
         CarWashService service = new CarWashService();
         apply(service, request, true);
-        return CatalogDtos.ServiceResponse.from(serviceRepository.saveAndFlush(service));
+        CarWashService saved = serviceRepository.saveAndFlush(service);
+        String priceStr = String.format("%,.0fđ", saved.getPrice());
+        notificationService.notifyAdmins(
+                "SERVICE",
+                "Dịch vụ mới được thêm",
+                "Thêm dịch vụ \"" + saved.getName() + "\" - Giá: " + priceStr + ", Thời lượng: " + saved.getDurationMinutes() + " phút.",
+                "BOOKING",
+                null);
+        notificationService.notifyCustomers(
+                "SERVICE",
+                "Dịch vụ mới vừa ra mắt!",
+                "Dịch vụ \"" + saved.getName() + "\" mới vừa được thêm vào hệ thống - Giá: " + priceStr + ". Đặt lịch ngay!",
+                "BOOKING",
+                null);
+        return CatalogDtos.ServiceResponse.from(saved);
     }
 
     @Transactional
@@ -94,7 +112,21 @@ public class CatalogService {
                     "Service was updated by another administrator. Refresh and try again");
         }
         apply(service, request, false);
-        return CatalogDtos.ServiceResponse.from(serviceRepository.saveAndFlush(service));
+        CarWashService saved = serviceRepository.saveAndFlush(service);
+        String priceStr = String.format("%,.0fđ", saved.getPrice());
+        notificationService.notifyAdmins(
+                "SERVICE",
+                "Dịch vụ đã được cập nhật",
+                "Cập nhật dịch vụ \"" + saved.getName() + "\" - Giá mới: " + priceStr + ", Thời lượng: " + saved.getDurationMinutes() + " phút.",
+                "BOOKING",
+                saved.getId());
+        notificationService.notifyCustomers(
+                "SERVICE",
+                "Cập nhật dịch vụ",
+                "Dịch vụ \"" + saved.getName() + "\" vừa được cập nhật - Giá: " + priceStr + ". Xem ngay!",
+                "BOOKING",
+                saved.getId());
+        return CatalogDtos.ServiceResponse.from(saved);
     }
 
     private void apply(ServiceCategory category, CatalogDtos.CategoryRequest request, String name) {
