@@ -23,6 +23,7 @@ import com.shinecraft.server.loyalty.Reward;
 import com.shinecraft.server.loyalty.RewardRedemption;
 import com.shinecraft.server.loyalty.RewardRedemptionRepository;
 import com.shinecraft.server.loyalty.RewardRedemptionStatus;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.payment.VnPayService;
 import com.shinecraft.server.promotion.Promotion;
 import com.shinecraft.server.promotion.PromotionService;
@@ -84,6 +85,7 @@ class BookingServiceLayerTest {
                 mock(AuditTrailService.class),
                 mock(VnPayService.class),
                 fileStorageService,
+                mock(NotificationService.class),
                 2,
                 true);
 

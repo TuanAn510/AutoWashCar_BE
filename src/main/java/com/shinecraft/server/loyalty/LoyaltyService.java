@@ -6,6 +6,7 @@ import com.shinecraft.server.booking.BookingStatus;
 import com.shinecraft.server.catalog.CarWashService;
 import com.shinecraft.server.catalog.CarWashServiceRepository;
 import com.shinecraft.server.common.ApiException;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserDtos;
@@ -44,6 +45,7 @@ public class LoyaltyService {
     private final UserRepository userRepository;
     private final AuthService authService;
     private final AuditTrailService auditTrailService;
+    private final NotificationService notificationService;
     private final int pointExpiryMonths;
 
     public LoyaltyService(
@@ -58,6 +60,7 @@ public class LoyaltyService {
             UserRepository userRepository,
             AuthService authService,
             AuditTrailService auditTrailService,
+            NotificationService notificationService,
             @Value("${app.loyalty.point-expiry-months:12}") int pointExpiryMonths) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
@@ -70,6 +73,7 @@ public class LoyaltyService {
         this.userRepository = userRepository;
         this.authService = authService;
         this.auditTrailService = auditTrailService;
+        this.notificationService = notificationService;
         this.pointExpiryMonths = pointExpiryMonths;
     }
 
@@ -285,6 +289,13 @@ public class LoyaltyService {
                 "REWARD_REDEEMED",
                 null,
                 rewardRedemptionAuditValue(redemption));
+        notificationService.notify(
+                customer,
+                "REWARD_REDEEMED",
+                "Đổi thưởng thành công",
+                "Bạn đã đổi phần thưởng \"" + reward.getName() + "\" thành công.",
+                "LOYALTY",
+                redemption.getId());
         return LoyaltyDtos.RedemptionResponse.from(redemption);
     }
 
@@ -377,6 +388,7 @@ public class LoyaltyService {
 
         if (!pending) {
             savePointLot(transaction, now);
+            notifyPointsEarned(customer, points, linkedBooking == null ? null : linkedBooking.getId());
         }
     }
 
@@ -391,6 +403,7 @@ public class LoyaltyService {
                     transaction.setPostedAt(postedAt);
                     transaction.setExpiresAt(postedAt.plusMonths(pointExpiryMonths));
                     savePointLot(transaction, postedAt);
+                    notifyPointsEarned(booking.getCustomer(), transaction.getPoints(), booking.getId());
                 });
     }
 
@@ -426,8 +439,30 @@ public class LoyaltyService {
                     customer.getId(),
                     currentTier != null ? currentTier.getName() : "none",
                     newTier.getName());
+            notificationService.notify(
+                    customer,
+                    "TIER_UPGRADED",
+                    "Bạn đã lên hạng thành viên",
+                    "Chúc mừng! Bạn đã được nâng lên hạng " + newTier.getName() + ".",
+                    "LOYALTY",
+                    customer.getId());
         }
         accountRepository.saveAndFlush(account);
+    }
+
+    private void notifyPointsEarned(User customer, int points, Long bookingId) {
+        if (points <= 0) {
+            return;
+        }
+        notificationService.notify(
+                customer,
+                "LOYALTY_POINTS_EARNED",
+                "Bạn được cộng điểm",
+                bookingId == null
+                        ? "Bạn vừa được cộng " + points + " điểm thành viên."
+                        : "Bạn vừa được cộng " + points + " điểm từ lịch #" + bookingId + ".",
+                "LOYALTY",
+                bookingId);
     }
 
     @Scheduled(cron = "0 0 2 1 * *")
