@@ -59,6 +59,14 @@ public class VehicleAccessRequest extends BaseEntity {
     @Column(length = 80)
     private String suggestedModelName;
 
+    /** Hãng/dòng chọn từ catalog (luồng 2: chọn catalog + trùng biển).
+     *  Không ảnh hưởng đến phân loại "combined" bên admin. */
+    @Column(length = 80)
+    private String catalogBrandName;
+
+    @Column(length = 80)
+    private String catalogModelName;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "brand_id")
     private VehicleBrand brandRef;

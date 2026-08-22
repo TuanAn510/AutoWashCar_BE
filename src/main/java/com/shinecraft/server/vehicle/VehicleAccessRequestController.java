@@ -77,6 +77,8 @@ public class VehicleAccessRequestController {
         accessRequest.setNote(request.getNote());
         accessRequest.setSuggestedBrandName(request.getSuggestedBrandName());
         accessRequest.setSuggestedModelName(request.getSuggestedModelName());
+        accessRequest.setCatalogBrandName(request.getCatalogBrandName());
+        accessRequest.setCatalogModelName(request.getCatalogModelName());
         vehicleRepository.findByLicensePlateAndIsActiveTrue(licensePlate).ifPresent(accessRequest::setVehicle);
         VehicleAccessRequest saved = requestRepository.save(accessRequest);
         // Luồng combined (trùng biển + "Khác" hãng/dòng): minh chứng được tách
@@ -403,7 +405,9 @@ public class VehicleAccessRequestController {
         }
         String name = hasText(accessRequest.getSuggestedBrandName())
                 ? accessRequest.getSuggestedBrandName().trim()
-                : (hasText(vehicle.getBrand()) ? vehicle.getBrand().trim() : null);
+                : (hasText(accessRequest.getCatalogBrandName())
+                    ? accessRequest.getCatalogBrandName().trim()
+                    : (hasText(vehicle.getBrand()) ? vehicle.getBrand().trim() : null));
         if (name == null || isOther(name)) {
             return null;
         }
@@ -422,7 +426,9 @@ public class VehicleAccessRequestController {
         }
         String name = hasText(accessRequest.getSuggestedModelName())
                 ? accessRequest.getSuggestedModelName().trim()
-                : (hasText(vehicle.getModel()) ? vehicle.getModel().trim() : null);
+                : (hasText(accessRequest.getCatalogModelName())
+                    ? accessRequest.getCatalogModelName().trim()
+                    : (hasText(vehicle.getModel()) ? vehicle.getModel().trim() : null));
         if (name == null || isOther(name)) {
             return null;
         }
@@ -462,6 +468,9 @@ public class VehicleAccessRequestController {
         private String note;
         private String suggestedBrandName;
         private String suggestedModelName;
+        /** Hãng/dòng chọn từ catalog (luồng 2). */
+        private String catalogBrandName;
+        private String catalogModelName;
         private List<MultipartFile> documents;
         /** Minh chứng hãng/dòng xe (luồng xác minh cả hãng/dòng lẫn biển số). */
         private List<MultipartFile> brandModelDocuments;
@@ -506,6 +515,22 @@ public class VehicleAccessRequestController {
 
         public void setSuggestedModelName(String suggestedModelName) {
             this.suggestedModelName = suggestedModelName;
+        }
+
+        public String getCatalogBrandName() {
+            return catalogBrandName;
+        }
+
+        public void setCatalogBrandName(String catalogBrandName) {
+            this.catalogBrandName = catalogBrandName;
+        }
+
+        public String getCatalogModelName() {
+            return catalogModelName;
+        }
+
+        public void setCatalogModelName(String catalogModelName) {
+            this.catalogModelName = catalogModelName;
         }
 
         public List<MultipartFile> getDocuments() {
@@ -630,6 +655,8 @@ public class VehicleAccessRequestController {
             List<DocumentSummary> documents,
             String suggestedBrandName,
             String suggestedModelName,
+            String catalogBrandName,
+            String catalogModelName,
             String carType,
             Integer manufactureYear,
             Long brandId,
@@ -656,6 +683,8 @@ public class VehicleAccessRequestController {
                     documents == null ? List.of() : documents,
                     request.getSuggestedBrandName(),
                     request.getSuggestedModelName(),
+                    request.getCatalogBrandName(),
+                    request.getCatalogModelName(),
                     request.getCarType(),
                     request.getManufactureYear(),
                     request.getBrandRef() == null ? null : request.getBrandRef().getId(),
