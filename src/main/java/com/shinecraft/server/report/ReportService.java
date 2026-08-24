@@ -123,7 +123,10 @@ public class ReportService {
         long total = bookings.size();
         long completed = bookings.stream().filter(this::isCompleted).count();
         long cancelled = bookings.stream().filter(booking -> booking.getStatus() == BookingStatus.CANCELLED).count();
-        long pending = bookings.stream().filter(booking -> booking.getStatus() == BookingStatus.PENDING).count();
+        long pending = bookings.stream()
+                .filter(booking -> booking.getStatus() == BookingStatus.PENDING
+                        || booking.getStatus() == BookingStatus.CONFIRMED)
+                .count();
 
         Map<YearMonth, Long> byMonth = new LinkedHashMap<>();
         bookings.stream()
@@ -209,7 +212,10 @@ public class ReportService {
     @Transactional(readOnly = true)
     public ReportDtos.LoyaltyReport loyalty(ReportDtos.ReportRange range) {
         List<LoyaltyTransaction> transactions = transactionsInRange(range);
-        List<LoyaltyAccount> accounts = loyaltyAccountRepository.findAll();
+        List<LoyaltyAccount> accounts = loyaltyAccountRepository.findAll().stream()
+                .filter(account -> account.getCustomer() != null)
+                .filter(account -> createdInRange(account.getCustomer().getCreatedAt(), range))
+                .toList();
         Map<String, Long> tiers = accounts.stream()
                 .collect(java.util.stream.Collectors.groupingBy(
                         account -> account.getMembershipTier() == null ? "Chua xep hang" : account.getMembershipTier().getName(),
