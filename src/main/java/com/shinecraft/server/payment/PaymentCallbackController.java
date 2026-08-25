@@ -51,7 +51,7 @@ public class PaymentCallbackController {
             return redirectToFe("success", null, bookingId);
         } else {
             bookingService.confirmPaymentInternal(
-                    bookingId, BookingPaymentStatus.CANCELLED, BookingPaymentMethod.VNPAY, txnRef);
+                    bookingId, BookingPaymentStatus.UNPAID, BookingPaymentMethod.VNPAY, txnRef);
             return redirectToFe("failure", "Payment was not successful", bookingId);
         }
     }
@@ -73,6 +73,8 @@ public class PaymentCallbackController {
                     bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, txnRef);
             return ResponseEntity.ok(Map.of("RspCode", "00", "Message", "Success"));
         } else {
+            bookingService.confirmPaymentInternal(
+                    bookingId, BookingPaymentStatus.UNPAID, BookingPaymentMethod.VNPAY, txnRef);
             return ResponseEntity.ok(Map.of("RspCode", "00", "Message", "Success"));
         }
     }

@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 @Service
 public class VnPayService {
@@ -24,7 +25,7 @@ public class VnPayService {
     public String createPaymentUrl(Booking booking, String clientIp) {
         Map<String, String> params = new TreeMap<>();
 
-        String txnRef = booking.getId() + "_" + System.currentTimeMillis();
+        String txnRef = booking.getId() + "_" + UUID.randomUUID().toString().replace("-", "");
         String amount = String.valueOf(booking.getFinalAmount().multiply(new java.math.BigDecimal(100)).longValue());
         String createDate = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
 

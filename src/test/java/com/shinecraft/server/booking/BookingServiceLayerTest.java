@@ -56,6 +56,7 @@ class BookingServiceLayerTest {
     private UserRepository userRepository;
     private BookingStatusHistoryRepository statusHistoryRepository;
     private FileStorageService fileStorageService;
+    private VnPayService vnPayService;
     private BookingServiceLayer bookingService;
     private User customer;
     private LoyaltyAccount account;
@@ -72,6 +73,7 @@ class BookingServiceLayerTest {
         userRepository = mock(UserRepository.class);
         statusHistoryRepository = mock(BookingStatusHistoryRepository.class);
         fileStorageService = mock(FileStorageService.class);
+        vnPayService = mock(VnPayService.class);
         bookingService = new BookingServiceLayer(
                 bookingRepository,
                 statusHistoryRepository,
@@ -83,7 +85,7 @@ class BookingServiceLayerTest {
                 authService,
                 userRepository,
                 mock(AuditTrailService.class),
-                mock(VnPayService.class),
+                vnPayService,
                 fileStorageService,
                 mock(NotificationService.class),
                 2,
@@ -1197,6 +1199,70 @@ class BookingServiceLayerTest {
         assertThat(response.method()).isEqualTo("cash");
         assertThat(response.paymentUrl()).contains("/appointments/99/payment/confirm");
         assertThat(response.amount()).isEqualByComparingTo("10000");
+    }
+
+    @Test
+    void failedVnPayAttemptBecomesRetryableAndRetryUsesNewReference() {
+        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        booking.setId(99L);
+        booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(vnPayService.createPaymentUrl(booking, "127.0.0.1"))
+                .thenReturn("https://pay.test?vnp_TxnRef=99_first&x=1")
+                .thenReturn("https://pay.test?vnp_TxnRef=99_second&x=1");
+
+        BookingDtos.PaymentResponse first = bookingService.createPayment(
+                99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1");
+        assertThat(first.paymentId()).isEqualTo("99_first");
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
+
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.UNPAID, BookingPaymentMethod.VNPAY, "99_first");
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.UNPAID);
+        assertThat(booking.isRefundRequired()).isFalse();
+        verify(loyaltyService, never()).earnPoints(any(), any(), any(Integer.class), any(), any());
+
+        BookingDtos.PaymentResponse retry = bookingService.createPayment(
+                99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1");
+        assertThat(retry.paymentId()).isEqualTo("99_second");
+        assertThat(retry.paymentId()).isNotEqualTo(first.paymentId());
+
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.UNPAID, BookingPaymentMethod.VNPAY, "99_first");
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
+        assertThat(booking.getPaymentGatewayRef()).isEqualTo("99_second");
+
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "99_second");
+        bookingService.confirmPaymentInternal(
+                99L, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "99_second");
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getPaymentGatewayRef()).isEqualTo("99_second");
+        verify(loyaltyService, never()).earnPoints(any(), any(), any(Integer.class), any(), any());
+    }
+
+    @Test
+    void paidOrCancelledBookingCannotStartNormalPayment() {
+        Booking paid = bookingWithStatus(BookingStatus.CONFIRMED);
+        paid.setPaymentStatus(BookingPaymentStatus.PAID);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(paid));
+
+        assertThatThrownBy(() -> bookingService.createPayment(
+                99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Paid appointments cannot be paid again");
+
+        Booking cancelled = bookingWithStatus(BookingStatus.CANCELLED);
+        cancelled.setPaymentStatus(BookingPaymentStatus.UNPAID);
+        cancelled.setCancellationReason(BookingCancellationReason.STORE_NOT_CONFIRMED);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(cancelled));
+
+        assertThatThrownBy(() -> bookingService.createPayment(
+                99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Cancelled appointments cannot be paid");
     }
 
     @Test
