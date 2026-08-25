@@ -686,6 +686,9 @@ public class BookingServiceLayer {
         if (booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
         }
+        if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Paid appointments cannot be paid again");
+        }
         BookingPaymentMethod method = request.resolvedMethod();
         booking.setPaymentMethod(method);
         booking.setPaymentStatus(BookingPaymentStatus.PENDING);
@@ -729,6 +732,12 @@ public class BookingServiceLayer {
         if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
             return;
         }
+        if (status != BookingPaymentStatus.PAID
+                && booking.getPaymentGatewayRef() != null
+                && gatewayRef != null
+                && !booking.getPaymentGatewayRef().equals(gatewayRef)) {
+            return;
+        }
         String beforeValue = bookingAuditValue(booking);
         booking.setPaymentMethod(method);
         booking.setPaymentStatus(status);
@@ -742,7 +751,7 @@ public class BookingServiceLayer {
             }
             notifyPaymentSuccess(booking);
             notifyRefundRequiredIfNeeded(booking);
-        } else if (status == BookingPaymentStatus.CANCELLED) {
+        } else if (status == BookingPaymentStatus.CANCELLED || status == BookingPaymentStatus.UNPAID) {
             notificationService.notify(
                     booking.getCustomer(),
                     "PAYMENT_FAILED",
@@ -898,7 +907,7 @@ public class BookingServiceLayer {
         if (booking.getStatus() != BookingStatus.PENDING) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
-                    "Chá»‰ cÃ³ thá»ƒ Ä‘á»•i lá»‹ch khi lá»‹ch háº¹n Ä‘ang chá» xÃ¡c nháº­n.");
+                    "Chỉ có thể đổi lịch khi lịch hẹn đang chờ xác nhận.");
         }
 
         int reservationDurationMinutes = totalDuration(booking);
