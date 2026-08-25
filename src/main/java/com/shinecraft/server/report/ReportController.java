@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class ReportController {
     private final ReportService reportService;
+    private final ReportExportService reportExportService;
 
-    public ReportController(ReportService reportService) {
+    public ReportController(ReportService reportService, ReportExportService reportExportService) {
         this.reportService = reportService;
+        this.reportExportService = reportExportService;
     }
 
     @GetMapping("/api/admin/dashboard/overview")
@@ -82,6 +84,47 @@ public class ReportController {
     @GetMapping("/api/reports/vehicles")
     ApiResponse<ReportDtos.VehicleReport> vehicles(@RequestParam Map<String, String> params) {
         return ApiResponse.ok("Vehicle report retrieved successfully", reportService.vehicles(range(params)));
+    }
+
+    @GetMapping("/api/reports/staff-performance")
+    ApiResponse<ReportDtos.StaffPerformanceReport> staffPerformance(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Staff performance report retrieved successfully", reportService.staffPerformance(range(params)));
+    }
+
+    @GetMapping("/api/reports/service-times")
+    ApiResponse<ReportDtos.ServiceTimeReport> serviceTimes(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Service time report retrieved successfully", reportService.serviceTimes(range(params)));
+    }
+
+    @GetMapping("/api/reports/promotion-effectiveness")
+    ApiResponse<ReportDtos.PromotionEffectivenessReport> promotionEffectiveness(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Promotion effectiveness report retrieved successfully", reportService.promotionEffectiveness(range(params)));
+    }
+
+    @GetMapping("/api/reports/customer-retention")
+    ApiResponse<ReportDtos.CustomerRetentionReport> customerRetention(@RequestParam Map<String, String> params) {
+        return ApiResponse.ok("Customer retention report retrieved successfully", reportService.customerRetention(range(params)));
+    }
+
+    @GetMapping("/api/reports/operational-alerts")
+    ApiResponse<ReportDtos.OperationalAlertReport> operationalAlerts() {
+        return ApiResponse.ok("Operational alerts retrieved successfully", reportService.operationalAlerts(LocalDateTime.now()));
+    }
+
+    @GetMapping("/api/admin/reports/export/analytics.xlsx")
+    ResponseEntity<byte[]> exportAnalyticsExcel(@RequestParam Map<String, String> params) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=admin-analytics.xlsx")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(reportExportService.excel(range(params)));
+    }
+
+    @GetMapping("/api/admin/reports/export/analytics.pdf")
+    ResponseEntity<byte[]> exportAnalyticsPdf(@RequestParam Map<String, String> params) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=admin-analytics.pdf")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(reportExportService.pdf(range(params)));
     }
 
     @GetMapping("/api/admin/reports/export/bookings.csv")

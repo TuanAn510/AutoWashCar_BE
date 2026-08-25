@@ -228,6 +228,107 @@ class ReportServiceTest {
         });
     }
 
+    @Test
+    void advancedReportsCalculateStaffTimePromotionRetentionAndAlerts() {
+        User customer = user(1L);
+        User staff = user(10L);
+        staff.setRole(UserRole.ROLE_STAFF);
+        staff.setFullName("Staff A");
+        Promotion promotion = promotion("FIXED_AMOUNT", 1, true, "2026-01-01T00:00:00", "2026-12-31T23:59:59");
+        promotion.setId(5L);
+        Booking completed = booking(1L, BookingStatus.COMPLETED, "2026-02-01T09:00:00", "2026-02-01T10:10:00", "90000");
+        completed.setCustomer(customer);
+        completed.setAssignedStaff(staff);
+        completed.setCheckInAt(LocalDateTime.parse("2026-02-01T09:10:00"));
+        completed.setServiceStartedAt(LocalDateTime.parse("2026-02-01T09:20:00"));
+        completed.setPromotion(promotion);
+        completed.setDiscountAmount(new BigDecimal("10000"));
+        markPaid(completed, "2026-02-01T10:10:00");
+        Booking completedAgain = booking(2L, BookingStatus.COMPLETED, "2026-02-10T09:00:00", "2026-02-10T10:00:00", "100000");
+        completedAgain.setCustomer(customer);
+        completedAgain.setAssignedStaff(staff);
+        completedAgain.setCheckInAt(LocalDateTime.parse("2026-02-10T09:20:00"));
+        markPaid(completedAgain, "2026-02-10T10:00:00");
+        Booking unpaid = booking(3L, BookingStatus.COMPLETED, "2026-02-11T09:00:00", "2026-02-11T10:00:00", "50000");
+
+        when(bookingRepository.findAll()).thenReturn(List.of(completed, completedAgain, unpaid));
+        when(userRepository.findAll()).thenReturn(List.of(customer, staff));
+        ReportDtos.ReportRange february = new ReportDtos.ReportRange(
+                LocalDateTime.parse("2026-02-01T00:00:00"), LocalDateTime.parse("2026-03-01T00:00:00"));
+
+        assertThat(reportService.staffPerformance(february).staff()).singleElement().satisfies(item -> {
+            assertThat(item.assignedBookings()).isEqualTo(2);
+            assertThat(item.completedBookings()).isEqualTo(2);
+            assertThat(item.attributedRevenue()).isEqualByComparingTo("190000");
+        });
+        assertThat(reportService.serviceTimes(february)).satisfies(item -> {
+            assertThat(item.averageWaitingMinutes()).isEqualTo(15);
+            assertThat(item.averageServiceMinutes()).isEqualTo(45);
+            assertThat(item.onTimeRate()).isEqualTo(50);
+        });
+        assertThat(reportService.promotionEffectiveness(february)).satisfies(item -> {
+            assertThat(item.bookingsWithPromotion()).isEqualTo(1);
+            assertThat(item.totalDiscount()).isEqualByComparingTo("10000");
+        });
+        assertThat(reportService.customerRetention(february)).satisfies(item -> {
+            assertThat(item.returningCustomers()).isEqualTo(1);
+            assertThat(item.retentionRate()).isEqualTo(50);
+        });
+        ReportDtos.OperationalAlertReport alerts =
+                reportService.operationalAlerts(LocalDateTime.parse("2026-02-12T09:00:00"));
+        assertThat(alerts.summary()).containsEntry("COMPLETED_UNPAID", 1L);
+        assertThat(alerts.alerts()).allSatisfy(item ->
+                assertThat(item.message()).doesNotContain("Booking da", "Booking trong"));
+        assertThat(alerts.alerts()).filteredOn(item -> item.bookingId().equals("3")).singleElement().satisfies(item -> {
+            assertThat(item.customerName()).isEqualTo("Customer 103");
+            assertThat(item.vehicleName()).isEqualTo("Toyota Model");
+            assertThat(item.licensePlate()).isEqualTo("TOYOTA123");
+            assertThat(item.scheduledAt()).isEqualTo(LocalDateTime.parse("2026-02-11T09:00:00"));
+            assertThat(item.message()).isEqualTo("Lịch hẹn đã hoàn thành nhưng chưa được thanh toán.");
+        });
+    }
+
+    @Test
+    void operationalAlertsKeepAllTypesAndStandardizedBookingMessages() {
+        LocalDateTime now = LocalDateTime.parse("2026-08-25T12:00:00");
+        User staff = user(500L);
+
+        Booking unassigned = booking(11L, BookingStatus.CONFIRMED, "2026-08-25T13:40:00", null, "100000");
+        Booking overdue = booking(12L, BookingStatus.CONFIRMED, "2026-08-25T10:00:00", null, "100000");
+        overdue.setAssignedStaff(staff);
+        Booking longRunning = booking(13L, BookingStatus.IN_PROGRESS, "2026-08-25T08:00:00", null, "100000");
+        longRunning.setAssignedStaff(staff);
+        longRunning.setServiceStartedAt(LocalDateTime.parse("2026-08-25T08:30:00"));
+        Booking unpaid = booking(14L, BookingStatus.COMPLETED, "2026-08-24T09:00:00", "2026-08-24T10:00:00", "100000");
+        Booking refund = booking(15L, BookingStatus.CANCELLED, "2026-08-20T09:30:00", null, "100000");
+        refund.setRefundRequired(true);
+
+        when(bookingRepository.findAll()).thenReturn(List.of(unassigned, overdue, longRunning, unpaid, refund));
+
+        ReportDtos.OperationalAlertReport result = reportService.operationalAlerts(now);
+
+        assertThat(result.total()).isEqualTo(5);
+        assertThat(result.summary()).containsOnly(
+                org.assertj.core.api.Assertions.entry("UNASSIGNED", 1L),
+                org.assertj.core.api.Assertions.entry("OVERDUE_CHECK_IN", 1L),
+                org.assertj.core.api.Assertions.entry("LONG_RUNNING", 1L),
+                org.assertj.core.api.Assertions.entry("COMPLETED_UNPAID", 1L),
+                org.assertj.core.api.Assertions.entry("REFUND_REQUIRED", 1L));
+        assertThat(result.alerts()).extracting(ReportDtos.OperationalAlertItem::message).containsExactlyInAnyOrder(
+                "Lịch hẹn trong 24 giờ tới chưa được phân công nhân viên.",
+                "Lịch hẹn đã quá giờ nhưng khách hàng chưa check-in.",
+                "Lịch hẹn đang được phục vụ quá 3 giờ.",
+                "Lịch hẹn đã hoàn thành nhưng chưa được thanh toán.",
+                "Lịch hẹn đã bị hủy và khoản thanh toán cần được xử lý hoàn tiền.");
+        assertThat(result.alerts()).allSatisfy(item -> {
+            assertThat(item.bookingId()).isNotBlank();
+            assertThat(item.customerName()).isNotBlank();
+            assertThat(item.vehicleName()).isNotBlank();
+            assertThat(item.licensePlate()).isNotBlank();
+            assertThat(item.scheduledAt()).isNotNull();
+        });
+    }
+
     private Booking booking(Long id, BookingStatus status, String scheduledAt, String completedAt, String finalAmount) {
         Booking booking = new Booking();
         booking.setId(id);

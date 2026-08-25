@@ -3,6 +3,7 @@ package com.shinecraft.server.report;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 public final class ReportDtos {
     private ReportDtos() {}
@@ -73,4 +74,90 @@ public final class ReportDtos {
             List<VehicleBrandItem> mostCommonVehicleBrands) {}
 
     public record VehicleBrandItem(String brand, long total) {}
+
+    public record StaffPerformanceReport(List<StaffPerformanceItem> staff) {}
+
+    public record StaffPerformanceItem(
+            String staffId,
+            String staffName,
+            long assignedBookings,
+            long completedBookings,
+            long cancelledBookings,
+            long activeBookings,
+            long completionRate,
+            BigDecimal attributedRevenue,
+            long averageServiceMinutes) {}
+
+    public record ServiceTimeReport(
+            long measuredWaitingBookings,
+            long measuredServiceBookings,
+            long averageWaitingMinutes,
+            long averageServiceMinutes,
+            long onTimeBookings,
+            long onTimeRate,
+            List<ServiceTimePeriodItem> groupedByMonth) {}
+
+    public record ServiceTimePeriodItem(
+            int year,
+            int month,
+            String period,
+            long bookings,
+            long averageWaitingMinutes,
+            long averageServiceMinutes) {}
+
+    public record PromotionEffectivenessReport(
+            long bookingsWithPromotion,
+            long bookingsWithoutPromotion,
+            BigDecimal totalDiscount,
+            BigDecimal promotionRevenue,
+            BigDecimal revenueWithoutPromotion,
+            BigDecimal averageOrderWithPromotion,
+            BigDecimal averageOrderWithoutPromotion,
+            List<PromotionEffectivenessItem> promotions) {}
+
+    public record PromotionEffectivenessItem(
+            String promotionId,
+            String code,
+            String title,
+            long usageCount,
+            long uniqueCustomers,
+            BigDecimal totalDiscount,
+            BigDecimal revenue,
+            BigDecimal averageOrderValue) {}
+
+    public record CustomerRetentionReport(
+            long customersWithCompletedBookings,
+            long oneTimeCustomers,
+            long returningCustomers,
+            long loyalCustomers,
+            long atRiskCustomers,
+            long inactiveCustomers,
+            long retentionRate,
+            List<CustomerSegmentItem> segments,
+            List<TopCustomerItem> topCustomers) {}
+
+    public record CustomerSegmentItem(String segment, long customers) {}
+
+    public record TopCustomerItem(
+            String customerId,
+            String customerName,
+            long completedBookings,
+            BigDecimal totalSpent,
+            LocalDateTime lastCompletedAt) {}
+
+    public record OperationalAlertReport(
+            long total,
+            Map<String, Long> summary,
+            List<OperationalAlertItem> alerts) {}
+
+    public record OperationalAlertItem(
+            String type,
+            String severity,
+            String bookingId,
+            String message,
+            LocalDateTime occurredAt,
+            String customerName,
+            String vehicleName,
+            String licensePlate,
+            LocalDateTime scheduledAt) {}
 }

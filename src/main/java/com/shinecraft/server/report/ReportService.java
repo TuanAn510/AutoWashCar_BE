@@ -25,6 +25,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -33,6 +34,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -273,6 +276,135 @@ public class ReportService {
     }
 
     @Transactional(readOnly = true)
+    public ReportDtos.StaffPerformanceReport staffPerformance(ReportDtos.ReportRange range) {
+        List<Booking> bookings = bookingsInRange(range);
+        List<User> staff = userRepository.findAll().stream()
+                .filter(user -> user.getRole() == UserRole.ROLE_STAFF)
+                .toList();
+        List<ReportDtos.StaffPerformanceItem> items = staff.stream().map(user -> {
+            List<Booking> assigned = bookings.stream().filter(booking -> isAssignedTo(booking, user)).toList();
+            long completed = assigned.stream().filter(this::isCompleted).count();
+            long cancelled = assigned.stream().filter(booking -> booking.getStatus() == BookingStatus.CANCELLED).count();
+            long active = assigned.size() - completed - cancelled;
+            BigDecimal revenue = assigned.stream().filter(this::isRealizedRevenue)
+                    .map(booking -> nullToZero(booking.getFinalAmount()).divide(
+                            BigDecimal.valueOf(assignedStaffCount(booking)), 2, RoundingMode.HALF_UP))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            long averageMinutes = roundedAverage(assigned.stream()
+                    .filter(this::hasServiceDuration)
+                    .mapToLong(booking -> Duration.between(serviceStart(booking), booking.getCompletedAt()).toMinutes())
+                    .boxed().toList());
+            return new ReportDtos.StaffPerformanceItem(
+                    String.valueOf(user.getId()), user.getFullName(), assigned.size(), completed, cancelled, active,
+                    percentage(completed, assigned.size()), revenue, averageMinutes);
+        }).sorted(Comparator.comparingLong(ReportDtos.StaffPerformanceItem::completedBookings).reversed()
+                .thenComparing(ReportDtos.StaffPerformanceItem::staffName)).toList();
+        return new ReportDtos.StaffPerformanceReport(items);
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDtos.ServiceTimeReport serviceTimes(ReportDtos.ReportRange range) {
+        List<Booking> bookings = bookingsInRange(range);
+        List<Booking> waiting = bookings.stream().filter(booking -> booking.getCheckInAt() != null).toList();
+        List<Booking> serviced = bookings.stream().filter(this::hasServiceDuration).toList();
+        long onTime = waiting.stream().filter(booking -> !booking.getCheckInAt().isAfter(booking.getScheduledAt().plusMinutes(15))).count();
+        Map<YearMonth, List<Booking>> grouped = serviced.stream().collect(Collectors.groupingBy(
+                booking -> YearMonth.from(booking.getScheduledAt()), LinkedHashMap::new, Collectors.toList()));
+        List<ReportDtos.ServiceTimePeriodItem> periods = grouped.entrySet().stream().map(entry -> {
+            List<Booking> values = entry.getValue();
+            List<Long> waitMinutes = values.stream().filter(booking -> booking.getCheckInAt() != null)
+                    .map(booking -> nonNegativeMinutes(booking.getScheduledAt(), booking.getCheckInAt())).toList();
+            List<Long> serviceMinutes = values.stream()
+                    .map(booking -> nonNegativeMinutes(serviceStart(booking), booking.getCompletedAt())).toList();
+            return new ReportDtos.ServiceTimePeriodItem(entry.getKey().getYear(), entry.getKey().getMonthValue(),
+                    entry.getKey().toString(), values.size(), roundedAverage(waitMinutes), roundedAverage(serviceMinutes));
+        }).toList();
+        return new ReportDtos.ServiceTimeReport(
+                waiting.size(), serviced.size(),
+                roundedAverage(waiting.stream().map(booking -> nonNegativeMinutes(booking.getScheduledAt(), booking.getCheckInAt())).toList()),
+                roundedAverage(serviced.stream().map(booking -> nonNegativeMinutes(serviceStart(booking), booking.getCompletedAt())).toList()),
+                onTime, percentage(onTime, waiting.size()), periods);
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDtos.PromotionEffectivenessReport promotionEffectiveness(ReportDtos.ReportRange range) {
+        List<Booking> paid = paidBookingsInReportRange(range);
+        List<Booking> promoted = paid.stream().filter(booking -> booking.getPromotion() != null).toList();
+        List<Booking> regular = paid.stream().filter(booking -> booking.getPromotion() == null).toList();
+        Map<Long, List<Booking>> byPromotion = promoted.stream().collect(Collectors.groupingBy(
+                booking -> booking.getPromotion().getId(), LinkedHashMap::new, Collectors.toList()));
+        List<ReportDtos.PromotionEffectivenessItem> items = byPromotion.values().stream().map(values -> {
+            Promotion promotion = values.get(0).getPromotion();
+            BigDecimal revenue = sumAmount(values, Booking::getFinalAmount);
+            return new ReportDtos.PromotionEffectivenessItem(String.valueOf(promotion.getId()), promotion.getCode(),
+                    promotion.getTitle(), values.size(), values.stream().map(b -> b.getCustomer().getId()).distinct().count(),
+                    sumAmount(values, Booking::getDiscountAmount), revenue, averageAmount(revenue, values.size()));
+        }).sorted(Comparator.comparing(ReportDtos.PromotionEffectivenessItem::revenue).reversed()).toList();
+        BigDecimal promotionRevenue = sumAmount(promoted, Booking::getFinalAmount);
+        BigDecimal regularRevenue = sumAmount(regular, Booking::getFinalAmount);
+        return new ReportDtos.PromotionEffectivenessReport(promoted.size(), regular.size(),
+                sumAmount(promoted, Booking::getDiscountAmount), promotionRevenue, regularRevenue,
+                averageAmount(promotionRevenue, promoted.size()), averageAmount(regularRevenue, regular.size()), items);
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDtos.CustomerRetentionReport customerRetention(ReportDtos.ReportRange range) {
+        LocalDateTime asOf = range.endExclusive() == null ? LocalDateTime.now() : range.endExclusive();
+        Map<Long, List<Booking>> byCustomer = bookingRepository.findAll().stream().filter(this::isCompleted)
+                .filter(booking -> booking.getCompletedAt() != null && booking.getCompletedAt().isBefore(asOf))
+                .collect(Collectors.groupingBy(booking -> booking.getCustomer().getId()));
+        long oneTime = byCustomer.values().stream().filter(values -> values.size() == 1).count();
+        long returning = byCustomer.values().stream().filter(values -> values.size() >= 2).count();
+        long loyal = byCustomer.values().stream().filter(values -> values.size() >= 4).count();
+        long atRisk = byCustomer.values().stream().filter(values -> daysSinceLast(values, asOf) >= 30 && daysSinceLast(values, asOf) < 90).count();
+        long inactive = byCustomer.values().stream().filter(values -> daysSinceLast(values, asOf) >= 90).count();
+        List<ReportDtos.CustomerSegmentItem> segments = List.of(
+                new ReportDtos.CustomerSegmentItem("one_time", oneTime),
+                new ReportDtos.CustomerSegmentItem("returning", returning),
+                new ReportDtos.CustomerSegmentItem("loyal", loyal),
+                new ReportDtos.CustomerSegmentItem("at_risk", atRisk),
+                new ReportDtos.CustomerSegmentItem("inactive", inactive));
+        List<ReportDtos.TopCustomerItem> top = byCustomer.values().stream().map(values -> {
+            User customer = values.get(0).getCustomer();
+            LocalDateTime last = values.stream().map(Booking::getCompletedAt).max(LocalDateTime::compareTo).orElse(null);
+            return new ReportDtos.TopCustomerItem(String.valueOf(customer.getId()), customer.getFullName(), values.size(),
+                    sumAmount(values.stream().filter(this::isRealizedRevenue).toList(), Booking::getFinalAmount), last);
+        }).sorted(Comparator.comparing(ReportDtos.TopCustomerItem::totalSpent).reversed()).limit(10).toList();
+        return new ReportDtos.CustomerRetentionReport(byCustomer.size(), oneTime, returning, loyal, atRisk, inactive,
+                percentage(returning, byCustomer.size()), segments, top);
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDtos.OperationalAlertReport operationalAlerts(LocalDateTime now) {
+        List<ReportDtos.OperationalAlertItem> alerts = new ArrayList<>();
+        for (Booking booking : bookingRepository.findAll()) {
+            if (isActiveStatus(booking.getStatus()) && booking.getAssignedStaff() == null
+                    && booking.getScheduledAt().isBefore(now.plusHours(24)) && !booking.getScheduledAt().isBefore(now)) {
+                alerts.add(alert("UNASSIGNED", "HIGH", booking, "Lịch hẹn trong 24 giờ tới chưa được phân công nhân viên.", booking.getScheduledAt()));
+            }
+            if (Set.of(BookingStatus.PENDING, BookingStatus.CONFIRMED).contains(booking.getStatus())
+                    && booking.getCheckInAt() == null && booking.getScheduledAt().plusMinutes(15).isBefore(now)) {
+                alerts.add(alert("OVERDUE_CHECK_IN", "HIGH", booking, "Lịch hẹn đã quá giờ nhưng khách hàng chưa check-in.", booking.getScheduledAt()));
+            }
+            if (booking.getStatus() == BookingStatus.IN_PROGRESS && serviceStart(booking) != null
+                    && serviceStart(booking).plusHours(3).isBefore(now)) {
+                alerts.add(alert("LONG_RUNNING", "MEDIUM", booking, "Lịch hẹn đang được phục vụ quá 3 giờ.", serviceStart(booking)));
+            }
+            if (booking.getStatus() == BookingStatus.COMPLETED && booking.getPaymentStatus() != BookingPaymentStatus.PAID) {
+                alerts.add(alert("COMPLETED_UNPAID", "HIGH", booking, "Lịch hẹn đã hoàn thành nhưng chưa được thanh toán.", booking.getCompletedAt()));
+            }
+            if (booking.getStatus() == BookingStatus.CANCELLED && booking.isRefundRequired()) {
+                alerts.add(alert("REFUND_REQUIRED", "HIGH", booking, "Lịch hẹn đã bị hủy và khoản thanh toán cần được xử lý hoàn tiền.", booking.getScheduledAt()));
+            }
+        }
+        Map<String, Long> summary = alerts.stream().collect(Collectors.groupingBy(
+                ReportDtos.OperationalAlertItem::type, LinkedHashMap::new, Collectors.counting()));
+        return new ReportDtos.OperationalAlertReport(alerts.size(), summary, alerts.stream()
+                .sorted(Comparator.comparing(ReportDtos.OperationalAlertItem::occurredAt,
+                        Comparator.nullsLast(Comparator.reverseOrder()))).toList());
+    }
+
+    @Transactional(readOnly = true)
     public String bookingsCsv() {
         StringBuilder builder = new StringBuilder("booking_id,customer_id,scheduled_at,status,final_amount,earned_points\n");
         for (Booking booking : bookingRepository.findAll()) {
@@ -381,6 +513,71 @@ public class ReportService {
 
     private BigDecimal nullToZero(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private boolean isAssignedTo(Booking booking, User staff) {
+        return sameUser(booking.getAssignedStaff(), staff) || sameUser(booking.getSecondaryAssignedStaff(), staff);
+    }
+
+    private boolean sameUser(User first, User second) {
+        return first != null && second != null && Objects.equals(first.getId(), second.getId());
+    }
+
+    private int assignedStaffCount(Booking booking) {
+        return booking.getSecondaryAssignedStaff() == null ? 1 : 2;
+    }
+
+    private boolean hasServiceDuration(Booking booking) {
+        return booking.getCompletedAt() != null && serviceStart(booking) != null
+                && !booking.getCompletedAt().isBefore(serviceStart(booking));
+    }
+
+    private LocalDateTime serviceStart(Booking booking) {
+        return booking.getServiceStartedAt() != null ? booking.getServiceStartedAt() : booking.getCheckInAt();
+    }
+
+    private long nonNegativeMinutes(LocalDateTime start, LocalDateTime end) {
+        return start == null || end == null ? 0 : Math.max(0, Duration.between(start, end).toMinutes());
+    }
+
+    private long roundedAverage(List<Long> values) {
+        return values.isEmpty() ? 0 : Math.round(values.stream().mapToLong(Long::longValue).average().orElse(0));
+    }
+
+    private BigDecimal sumAmount(List<Booking> bookings, java.util.function.Function<Booking, BigDecimal> getter) {
+        return bookings.stream().map(getter).map(this::nullToZero).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal averageAmount(BigDecimal total, long count) {
+        return count == 0 ? BigDecimal.ZERO : total.divide(BigDecimal.valueOf(count), 2, RoundingMode.HALF_UP);
+    }
+
+    private long daysSinceLast(List<Booking> bookings, LocalDateTime asOf) {
+        LocalDateTime last = bookings.stream().map(Booking::getCompletedAt).max(LocalDateTime::compareTo).orElse(asOf);
+        return Math.max(0, Duration.between(last, asOf).toDays());
+    }
+
+    private boolean isActiveStatus(BookingStatus status) {
+        return Set.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS).contains(status);
+    }
+
+    private ReportDtos.OperationalAlertItem alert(
+            String type, String severity, Booking booking, String message, LocalDateTime occurredAt) {
+        String vehicleName = booking.getVehicle() == null
+                ? "Chưa có thông tin xe"
+                : (safeLabel(booking.getVehicle().getBrand(), "") + " "
+                                + safeLabel(booking.getVehicle().getModel(), ""))
+                        .trim();
+        return new ReportDtos.OperationalAlertItem(
+                type,
+                severity,
+                String.valueOf(booking.getId()),
+                message,
+                occurredAt,
+                booking.getCustomer() == null ? "Chưa có thông tin khách hàng" : booking.getCustomer().getFullName(),
+                vehicleName.isBlank() ? "Chưa có thông tin xe" : vehicleName,
+                booking.getVehicle() == null ? "" : booking.getVehicle().getLicensePlate(),
+                booking.getScheduledAt());
     }
 
     private String safeLabel(String value, String fallback) {
