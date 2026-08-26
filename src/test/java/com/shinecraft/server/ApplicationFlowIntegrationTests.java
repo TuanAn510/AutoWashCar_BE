@@ -738,6 +738,8 @@ class ApplicationFlowIntegrationTests {
                                 .formatted(rescheduledAt)))
                 .andExpect(status().isOk());
 
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+
         mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
                         .header("Authorization", bearer(customer.token()))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -759,7 +761,6 @@ class ApplicationFlowIntegrationTests {
                                 """))
                 .andExpect(status().isOk());
 
-        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
         updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
         updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
         updateBookingStatus(adminToken, bookingId, "COMPLETED");
@@ -1401,6 +1402,18 @@ class ApplicationFlowIntegrationTests {
         CustomerContext customer = registerCustomer();
         String adminToken = loginAdmin();
         Long bookingId = createBooking(customer, null);
+
+        mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
+                        .header("Authorization", bearer(customer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "method": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
+
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
 
         mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
                         .header("Authorization", bearer(customer.token()))

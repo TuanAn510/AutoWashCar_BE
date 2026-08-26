@@ -590,15 +590,6 @@ public class BookingServiceLayer {
             booking.setCompletedAt(LocalDateTime.now());
             awardPointsForBooking(booking);
             loyaltyService.postPendingBookingEarning(booking);
-            // Cash is collected on-site by staff. When the appointment is completed,
-            // auto-confirm the payment as PAID so admin sees it paid without a separate
-            // confirmation (only admin could previously confirm cash payments).
-            if (booking.getPaymentMethod() == BookingPaymentMethod.CASH
-                    && booking.getPaymentStatus() != BookingPaymentStatus.PAID
-                    && booking.getPaymentStatus() != BookingPaymentStatus.CANCELLED) {
-                booking.setPaymentStatus(BookingPaymentStatus.PAID);
-                booking.setPaidAt(LocalDateTime.now());
-            }
         }
         auditTrailService.record(
                 actor,
@@ -683,12 +674,14 @@ public class BookingServiceLayer {
         User actor = authService.currentUser();
         requireCanCreatePayment(actor, booking);
         String beforeValue = bookingAuditValue(booking);
-        if (booking.getStatus() == BookingStatus.CANCELLED) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
+        if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Appointment has already been paid");
+        }
+        if (booking.getStatus() != BookingStatus.CONFIRMED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Only confirmed appointments can be paid");
         }
         BookingPaymentMethod method = request.resolvedMethod();
         booking.setPaymentMethod(method);
-        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
         booking.setPaidAt(null);
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
 
@@ -697,13 +690,15 @@ public class BookingServiceLayer {
         String qrCodeUrl = null;
 
         if (method == BookingPaymentMethod.VNPAY) {
+            booking.setPaymentStatus(BookingPaymentStatus.PENDING);
             paymentUrl = vnPayService.createPaymentUrl(booking, clientIp);
             paymentId = extractTxnRefFromUrl(paymentUrl);
             booking.setPaymentGatewayRef(paymentId);
         } else {
-            // CASH
-            paymentId = "APPT-" + booking.getId() + "-" + System.currentTimeMillis();
-            paymentUrl = "/appointments/" + booking.getId() + "/payment/confirm?paymentId=" + paymentId;
+            booking.setPaymentStatus(BookingPaymentStatus.PENDING);
+            booking.setPaymentGatewayRef(null);
+            paymentId = null;
+            paymentUrl = null;
         }
 
         auditTrailService.record(
@@ -727,6 +722,11 @@ public class BookingServiceLayer {
         Booking booking = findBookingForLifecycleUpdate(bookingId);
         // Only update if not already PAID (prevent duplicate IPN + return)
         if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
+            return;
+        }
+        if (gatewayRef != null
+                && booking.getPaymentGatewayRef() != null
+                && !booking.getPaymentGatewayRef().equals(gatewayRef)) {
             return;
         }
         String beforeValue = bookingAuditValue(booking);
@@ -797,6 +797,11 @@ public class BookingServiceLayer {
         BookingPaymentMethod method = request == null
                 ? booking.getPaymentMethod()
                 : request.resolvedPaymentMethod(booking.getPaymentMethod());
+        if (status == BookingPaymentStatus.PAID
+                && method == BookingPaymentMethod.CASH
+                && booking.getStatus() != BookingStatus.COMPLETED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Cash payment can only be confirmed after service completion");
+        }
         booking.setPaymentMethod(method);
         booking.setPaymentStatus(status);
         booking.setPaidAt(status == BookingPaymentStatus.PAID ? LocalDateTime.now() : null);
