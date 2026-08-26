@@ -1,10 +1,13 @@
 package com.shinecraft.server.catalog;
 
 import com.shinecraft.server.common.ApiResponse;
+import com.shinecraft.server.common.ApiListResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -26,30 +29,80 @@ public class CatalogController {
         return ApiResponse.ok("Service categories retrieved successfully", catalogService.categories());
     }
 
+    @GetMapping("/api/service-categories/active")
+    ApiListResponse<CatalogDtos.CategoryResponse> activeCategoriesForFrontend() {
+        return ApiListResponse.ok("Service categories retrieved successfully", catalogService.categories());
+    }
+
+    @GetMapping("/api/service-categories")
+    ApiListResponse<CatalogDtos.CategoryResponse> categoriesForFrontend() {
+        return ApiListResponse.ok("Service categories retrieved successfully", catalogService.allCategories());
+    }
+
     @GetMapping("/api/catalog/services")
     ApiResponse<List<CatalogDtos.ServiceResponse>> services() {
         return ApiResponse.ok("Services retrieved successfully", catalogService.services());
     }
 
+    @GetMapping("/api/services/active")
+    ApiListResponse<CatalogDtos.ServiceResponse> activeServicesForFrontend() {
+        return ApiListResponse.ok("Services retrieved successfully", catalogService.services());
+    }
+
+    @GetMapping("/api/services")
+    ApiListResponse<CatalogDtos.ServiceResponse> servicesForFrontend() {
+        return ApiListResponse.ok("Services retrieved successfully", catalogService.allServices());
+    }
+
     @PostMapping("/api/admin/catalog/categories")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     ApiResponse<CatalogDtos.CategoryResponse> createCategory(@Valid @RequestBody CatalogDtos.CategoryRequest request) {
         return ApiResponse.ok("Service category created successfully", catalogService.createCategory(request));
     }
 
+    @PostMapping("/api/service-categories")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    ApiResponse<CatalogDtos.CategoryResponse> createCategoryForFrontend(@Valid @RequestBody CatalogDtos.CategoryRequest request) {
+        return createCategory(request);
+    }
+
     @PutMapping("/api/admin/catalog/categories/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     ApiResponse<CatalogDtos.CategoryResponse> updateCategory(
             @PathVariable Long id, @Valid @RequestBody CatalogDtos.CategoryRequest request) {
         return ApiResponse.ok("Service category updated successfully", catalogService.updateCategory(id, request));
     }
 
+    @PatchMapping("/api/service-categories/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    ApiResponse<CatalogDtos.CategoryResponse> updateCategoryForFrontend(
+            @PathVariable Long id, @Valid @RequestBody CatalogDtos.CategoryRequest request) {
+        return updateCategory(id, request);
+    }
+
     @PostMapping("/api/admin/catalog/services")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     ApiResponse<CatalogDtos.ServiceResponse> createService(@Valid @RequestBody CatalogDtos.ServiceRequest request) {
         return ApiResponse.ok("Service created successfully", catalogService.createService(request));
     }
 
+    @PostMapping("/api/services")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    ApiResponse<CatalogDtos.ServiceResponse> createServiceForFrontend(@Valid @RequestBody CatalogDtos.ServiceRequest request) {
+        return createService(request);
+    }
+
     @PutMapping("/api/admin/catalog/services/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     ApiResponse<CatalogDtos.ServiceResponse> updateService(
             @PathVariable Long id, @Valid @RequestBody CatalogDtos.ServiceRequest request) {
         return ApiResponse.ok("Service updated successfully", catalogService.updateService(id, request));
+    }
+
+    @PatchMapping("/api/services/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    ApiResponse<CatalogDtos.ServiceResponse> updateServiceForFrontend(
+            @PathVariable Long id, @Valid @RequestBody CatalogDtos.ServiceRequest request) {
+        return updateService(id, request);
     }
 }

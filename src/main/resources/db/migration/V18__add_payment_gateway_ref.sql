@@ -1,0 +1,1 @@
+ALTER TABLE bookings ADD payment_gateway_ref NVARCHAR(100) NULL;

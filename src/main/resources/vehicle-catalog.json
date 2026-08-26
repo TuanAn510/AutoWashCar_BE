@@ -1,0 +1,22 @@
+{
+  "VinFast": ["Fadil", "Lux A2.0", "Lux SA2.0", "President", "VF e34", "VF 3", "VF 5", "VF 6", "VF 7", "VF 8", "VF 9"],
+  "Toyota": ["Vios", "Corolla Altis", "Camry", "Yaris", "Raize", "Veloz Cross", "Avanza Premio", "Innova", "Innova Cross", "Fortuner", "Corolla Cross", "Yaris Cross", "Hilux", "Land Cruiser", "Land Cruiser Prado", "Wigo"],
+  "Honda": ["City", "Civic", "Accord", "Brio", "Jazz", "HR-V", "BR-V", "CR-V", "Pilot", "Odyssey"],
+  "Hyundai": ["Grand i10", "Accent", "Elantra", "Sonata", "Creta", "Tucson", "Santa Fe", "Palisade", "Stargazer", "Custin", "Venue"],
+  "Kia": ["Morning", "Soluto", "K3", "K5", "Sonet", "Seltos", "Carens", "Sportage", "Sorento", "Carnival", "Telluride"],
+  "Mazda": ["Mazda2", "Mazda3", "Mazda6", "CX-3", "CX-30", "CX-5", "CX-8", "CX-9", "BT-50"],
+  "Ford": ["Ranger", "Everest", "Territory", "Explorer", "EcoSport", "Focus", "Fiesta", "Transit", "Mustang"],
+  "Mitsubishi": ["Attrage", "Mirage", "Xpander", "Xpander Cross", "Outlander", "Pajero Sport", "Triton", "Xforce"],
+  "Nissan": ["Almera", "Sunny", "Navara", "Terra", "Kicks", "X-Trail", "Teana"],
+  "Suzuki": ["Swift", "Ciaz", "Ertiga", "XL7", "Jimny", "Carry", "Celerio"],
+  "Mercedes-Benz": ["A-Class", "C-Class", "E-Class", "S-Class", "CLA", "GLA", "GLB", "GLC", "GLE", "GLS", "G-Class", "V-Class"],
+  "BMW": ["3 Series", "5 Series", "7 Series", "X1", "X3", "X4", "X5", "X6", "X7", "Z4"],
+  "Audi": ["A4", "A6", "A7", "A8", "Q2", "Q3", "Q5", "Q7", "Q8", "TT"],
+  "Lexus": ["ES", "IS", "LS", "NX", "RX", "GX", "LX", "LM"],
+  "Peugeot": ["2008", "3008", "5008", "Traveller"],
+  "MG": ["MG5", "ZS", "HS", "RX5", "MG4"],
+  "Subaru": ["Forester", "Outback", "BRZ", "WRX"],
+  "Volkswagen": ["Polo", "T-Cross", "Tiguan", "Teramont", "Touareg", "Virtus"],
+  "Volvo": ["S60", "S90", "XC40", "XC60", "XC90"],
+  "Isuzu": ["D-Max", "MU-X"]
+}

@@ -4,6 +4,11 @@ import java.util.HashMap;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,10 +16,17 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiResponse<Map<String, Object>>> handleApiException(ApiException exception) {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("status", exception.getStatus().value());
+        if (exception.getCode() != null) {
+            meta.put("code", exception.getCode());
+        }
         return ResponseEntity.status(exception.getStatus())
-                .body(ApiResponse.fail(exception.getMessage(), Map.of("status", exception.getStatus().value())));
+                .body(ApiResponse.fail(exception.getMessage(), meta));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -26,9 +38,36 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.fail("Invalid request data", errors));
     }
 
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    ResponseEntity<ApiResponse<Map<String, Object>>> handleOptimisticLock(
+            ObjectOptimisticLockingFailureException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(
+                        "Data was updated by another request. Refresh and try again",
+                        Map.of("status", HttpStatus.CONFLICT.value())));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<ApiResponse<Map<String, Object>>> handleAccessDenied(AccessDeniedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.fail(
+                        "You do not have permission to perform this action",
+                        Map.of("status", HttpStatus.FORBIDDEN.value())));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    ResponseEntity<ApiResponse<Map<String, Object>>> handleDataIntegrity(DataIntegrityViolationException exception) {
+        LOGGER.warn("Database constraint rejected a request", exception);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(
+                        "The requested change conflicts with existing data",
+                        Map.of("status", HttpStatus.CONFLICT.value())));
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiResponse<Map<String, Object>>> handleUnexpected(Exception exception) {
+        LOGGER.error("Unexpected application error", exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.fail("Internal server error", Map.of("error", exception.getMessage())));
+                .body(ApiResponse.fail("Internal server error", Map.of("status", HttpStatus.INTERNAL_SERVER_ERROR.value())));
     }
 }

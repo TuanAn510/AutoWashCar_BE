@@ -18,7 +18,6 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -31,7 +30,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "bookings", uniqueConstraints = @UniqueConstraint(name = "uk_bookings_scheduled_at", columnNames = "scheduled_at"))
+@Table(name = "bookings")
 public class Booking extends BaseEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -45,8 +44,28 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "vehicle_id")
     private Vehicle vehicle;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_staff_id")
+    private User assignedStaff;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "secondary_assigned_staff_id")
+    private User secondaryAssignedStaff;
+
     @Column(nullable = false)
     private LocalDateTime scheduledAt;
+
+    @Column(name = "check_in_at")
+    private LocalDateTime checkInAt;
+
+    @Column(name = "service_started_at")
+    private LocalDateTime serviceStartedAt;
+
+    @Column(name = "check_in_image_url", length = 500)
+    private String checkInImageUrl;
+
+    @Column(name = "completion_image_url", length = 500)
+    private String completionImageUrl;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
@@ -64,6 +83,26 @@ public class Booking extends BaseEntity {
     @Column(nullable = false)
     private Integer earnedPoints = 0;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private BookingPaymentMethod paymentMethod = BookingPaymentMethod.CASH;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private BookingPaymentStatus paymentStatus = BookingPaymentStatus.UNPAID;
+
+    private LocalDateTime paidAt;
+
+    @Column(length = 100)
+    private String paymentGatewayRef;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_reason", length = 40)
+    private BookingCancellationReason cancellationReason;
+
+    @Column(name = "refund_required", nullable = false)
+    private boolean refundRequired = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")
     private Promotion promotion;
@@ -72,7 +111,7 @@ public class Booking extends BaseEntity {
     @JoinColumn(name = "reward_redemption_id")
     private RewardRedemption rewardRedemption;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String note;
 
     private LocalDateTime completedAt;

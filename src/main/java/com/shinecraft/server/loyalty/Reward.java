@@ -14,6 +14,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -31,7 +32,7 @@ public class Reward extends BaseEntity {
     @Column(nullable = false, length = 160)
     private String name;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false)
@@ -43,6 +44,16 @@ public class Reward extends BaseEntity {
 
     @Column(precision = 12, scale = 2)
     private BigDecimal discountAmount;
+
+    @Column(precision = 12, scale = 2)
+    private BigDecimal minOrderAmount;
+
+    @Column(precision = 12, scale = 2)
+    private BigDecimal maxDiscountAmount;
+
+    private Integer quantity;
+
+    private LocalDateTime expiredAt;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "add_on_service_id")

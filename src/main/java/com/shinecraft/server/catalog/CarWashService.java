@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -32,7 +33,7 @@ public class CarWashService extends BaseEntity {
     @Column(nullable = false, length = 120)
     private String name;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     @Column(nullable = false, precision = 12, scale = 2)
@@ -42,5 +43,14 @@ public class CarWashService extends BaseEntity {
     private Integer durationMinutes;
 
     @Column(nullable = false)
+    private Integer rewardPoints = 0;
+
+    @Column(nullable = false, precision = 3, scale = 1)
+    private BigDecimal rewardMultiplier = ServiceRewardPointsPolicy.DEFAULT_MULTIPLIER;
+
+    @Column(nullable = false)
     private boolean isActive = true;
+
+    @Version
+    private Long version = 0L;
 }

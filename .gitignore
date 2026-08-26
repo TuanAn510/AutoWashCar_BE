@@ -4,6 +4,15 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### Logs ###
+logs/
+*.log
+*.err.log
+*.dumpstream
+
+### Runtime uploads ###
+uploads/
+
 ### STS ###
 .apt_generated
 .classpath

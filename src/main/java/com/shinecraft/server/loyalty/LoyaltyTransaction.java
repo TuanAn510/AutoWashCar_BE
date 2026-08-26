@@ -45,19 +45,29 @@ public class LoyaltyTransaction {
     @Column(nullable = false, length = 30)
     private LoyaltyTransactionType type;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private LoyaltyTransactionStatus status = LoyaltyTransactionStatus.POSTED;
+
     @Column(nullable = false)
     private Integer points;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "NVARCHAR(MAX)")
     private String description;
 
     private LocalDateTime expiresAt;
+
+    private LocalDateTime postedAt;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @PrePersist
     void prePersist() {
-        createdAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        if (status == LoyaltyTransactionStatus.POSTED && postedAt == null) {
+            postedAt = now;
+        }
     }
 }
