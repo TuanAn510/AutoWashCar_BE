@@ -738,6 +738,14 @@ class ApplicationFlowIntegrationTests {
                                 .formatted(rescheduledAt)))
                 .andExpect(status().isOk());
 
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        Booking reportBooking = bookingRepository.findById(bookingId).orElseThrow();
+        reportBooking.setScheduledAt(LocalDate.now().minusDays(1).atTime(10, 17));
+        bookingRepository.saveAndFlush(reportBooking);
+        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
+        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
+        updateBookingStatus(adminToken, bookingId, "COMPLETED");
+
         mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
                         .header("Authorization", bearer(customer.token()))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -758,11 +766,6 @@ class ApplicationFlowIntegrationTests {
                                 }
                                 """))
                 .andExpect(status().isOk());
-
-        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
-        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
-        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
-        updateBookingStatus(adminToken, bookingId, "COMPLETED");
 
         assertThat(operationalAuditActionsForBooking(bookingId))
                 .contains(
@@ -1402,20 +1405,31 @@ class ApplicationFlowIntegrationTests {
         String adminToken = loginAdmin();
         Long bookingId = createBooking(customer, null);
 
+        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        booking.setScheduledAt(LocalDate.now().minusDays(1).atTime(9, 17));
+        bookingRepository.saveAndFlush(booking);
+        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
+        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
+        updateBookingStatus(adminToken, bookingId, "COMPLETED");
+
         mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
                         .header("Authorization", bearer(customer.token()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "method": "vnpay"
+                                  "method": "cash"
                                 }
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.paymentUrl", notNullValue()))
                 .andExpect(jsonPath("$.data.paymentId", notNullValue()))
-                .andExpect(jsonPath("$.data.method", is("vnpay")))
+                .andExpect(jsonPath("$.data.method", is("cash")))
                 .andExpect(jsonPath("$.data.amount", notNullValue()));
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getPaymentStatus())
+                .isEqualTo(BookingPaymentStatus.PENDING);
 
         mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
                         .header("Authorization", bearer(adminToken))
@@ -1423,12 +1437,12 @@ class ApplicationFlowIntegrationTests {
                         .content("""
                                 {
                                   "paymentStatus": "paid",
-                                  "paymentMethod": "vnpay"
+                                  "paymentMethod": "cash"
                                 }
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.paymentStatus", is("paid")))
-                .andExpect(jsonPath("$.data.paymentMethod", is("vnpay")));
+                .andExpect(jsonPath("$.data.paymentMethod", is("cash")));
     }
 
     @Test
@@ -1643,16 +1657,8 @@ class ApplicationFlowIntegrationTests {
         Promotion promotion = createActivePromotion("PAID-CANCEL-" + SEQUENCE.getAndIncrement());
         Long bookingId = createBooking(customer, promotion.getId());
 
-        mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
-                        .header("Authorization", bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "paymentStatus": "paid",
-                                  "paymentMethod": "vnpay"
-                                }
-                                """))
-                .andExpect(status().isOk());
+        bookingService.confirmPaymentInternal(
+                bookingId, BookingPaymentStatus.PAID, BookingPaymentMethod.VNPAY, "LEGACY-PAID-" + bookingId);
 
         mockMvc.perform(patch("/api/appointments/my/{id}/cancel", bookingId)
                         .header("Authorization", bearer(customer.token())))

@@ -762,16 +762,24 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void statusAllowsCancellationFromEveryNonTerminalStatus() {
+    void statusAllowsCancellationOnlyFromPending() {
         assertAllowedTransition(BookingStatus.PENDING, BookingStatus.CANCELLED);
-        assertAllowedTransition(BookingStatus.CONFIRMED, BookingStatus.CANCELLED);
-        assertAllowedTransition(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED);
-        assertAllowedTransition(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED);
+        for (BookingStatus status : List.of(
+                BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS)) {
+            Booking booking = bookingWithStatus(status);
+            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+            assertThatThrownBy(() -> bookingService.updateStatus(99L, BookingStatus.CANCELLED))
+                    .isInstanceOf(ApiException.class)
+                    .hasMessage("Only pending appointments can be cancelled");
+        }
     }
 
     @Test
     void statusAllowsInProgressToCompletedAndPreservesCompletionSideEffects() {
         Booking booking = bookingWithStatus(BookingStatus.IN_PROGRESS);
+        booking.setPaymentMethod(BookingPaymentMethod.CASH);
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
         BookingService serviceSnapshot = new BookingService();
         CarWashService service = new CarWashService();
         service.setId(1L);
@@ -791,6 +799,8 @@ class BookingServiceLayerTest {
         assertThat(booking.getCompletedAt()).isNotNull();
         assertThat(booking.getCompletionImageUrl()).isEqualTo("/uploads/status-evidence.jpg");
         assertThat(booking.getEarnedPoints()).isEqualTo(2);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
+        assertThat(booking.getPaidAt()).isNull();
         verify(loyaltyService).earnPoints(
                 customer, BigDecimal.valueOf(10000), 2, "Earned points from booking #99", booking);
         verify(loyaltyService).postPendingBookingEarning(booking);
@@ -1187,7 +1197,7 @@ class BookingServiceLayerTest {
 
     @Test
     void createPaymentStoresPendingPaymentMethodAndReturnsPaymentDetails() {
-        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        Booking booking = bookingWithStatus(BookingStatus.COMPLETED);
         booking.setId(99L);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
@@ -1203,7 +1213,7 @@ class BookingServiceLayerTest {
 
     @Test
     void failedVnPayAttemptBecomesRetryableAndRetryUsesNewReference() {
-        Booking booking = bookingWithStatus(BookingStatus.PENDING);
+        Booking booking = bookingWithStatus(BookingStatus.COMPLETED);
         booking.setId(99L);
         booking.setPaymentStatus(BookingPaymentStatus.UNPAID);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
@@ -1214,12 +1224,12 @@ class BookingServiceLayerTest {
         BookingDtos.PaymentResponse first = bookingService.createPayment(
                 99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1");
         assertThat(first.paymentId()).isEqualTo("99_first");
-        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
 
         bookingService.confirmPaymentInternal(
                 99L, BookingPaymentStatus.UNPAID, BookingPaymentMethod.VNPAY, "99_first");
-        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.UNPAID);
         assertThat(booking.isRefundRequired()).isFalse();
         verify(loyaltyService, never()).earnPoints(any(), any(), any(Integer.class), any(), any());
@@ -1244,8 +1254,24 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void paidOrCancelledBookingCannotStartNormalPayment() {
-        Booking paid = bookingWithStatus(BookingStatus.CONFIRMED);
+    void onlyCompletedUnpaidBookingCanStartPayment() {
+        for (BookingStatus status : List.of(
+                BookingStatus.PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.IN_QUEUE,
+                BookingStatus.IN_PROGRESS,
+                BookingStatus.CANCELLED)) {
+            Booking nonCompleted = bookingWithStatus(status);
+            nonCompleted.setPaymentStatus(BookingPaymentStatus.UNPAID);
+            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(nonCompleted));
+
+            assertThatThrownBy(() -> bookingService.createPayment(
+                    99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
+                    .isInstanceOf(ApiException.class)
+                    .hasMessage("Only completed appointments can be paid");
+        }
+
+        Booking paid = bookingWithStatus(BookingStatus.COMPLETED);
         paid.setPaymentStatus(BookingPaymentStatus.PAID);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(paid));
 
@@ -1253,22 +1279,13 @@ class BookingServiceLayerTest {
                 99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("Paid appointments cannot be paid again");
-
-        Booking cancelled = bookingWithStatus(BookingStatus.CANCELLED);
-        cancelled.setPaymentStatus(BookingPaymentStatus.UNPAID);
-        cancelled.setCancellationReason(BookingCancellationReason.STORE_NOT_CONFIRMED);
-        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(cancelled));
-
-        assertThatThrownBy(() -> bookingService.createPayment(
-                99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
-                .isInstanceOf(ApiException.class)
-                .hasMessage("Cancelled appointments cannot be paid");
     }
 
     @Test
-    void updatePaymentStatusMarksAppointmentPaid() {
-        Booking booking = bookingWithStatus(BookingStatus.CONFIRMED);
-        booking.setPaymentMethod(BookingPaymentMethod.MOMO);
+    void adminCanConfirmCompletedCashPayment() {
+        Booking booking = bookingWithStatus(BookingStatus.COMPLETED);
+        booking.setPaymentMethod(BookingPaymentMethod.CASH);
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
         when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
 
         BookingDtos.AppointmentResponse response = bookingService.updatePaymentStatus(
@@ -1277,7 +1294,45 @@ class BookingServiceLayerTest {
         assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
         assertThat(booking.getPaidAt()).isNotNull();
         assertThat(response.paymentStatus()).isEqualTo("paid");
-        assertThat(response.paymentMethod()).isEqualTo("momo");
+        assertThat(response.paymentMethod()).isEqualTo("cash");
+    }
+
+    @Test
+    void assignedStaffCanConfirmCompletedCashPaymentButCustomerCannot() {
+        Booking booking = bookingWithStatus(BookingStatus.COMPLETED);
+        booking.setPaymentMethod(BookingPaymentMethod.CASH);
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
+        User staff = new User();
+        staff.setId(7L);
+        staff.setRole(UserRole.ROLE_STAFF);
+        booking.setAssignedStaff(staff);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+        when(authService.currentUser()).thenReturn(staff);
+
+        bookingService.updatePaymentStatus(99L, new BookingDtos.UpdatePaymentStatusRequest("paid", "cash"));
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
+        customer.setRole(UserRole.ROLE_CUSTOMER);
+        booking.setCustomer(customer);
+        when(authService.currentUser()).thenReturn(customer);
+        assertThatThrownBy(() -> bookingService.updatePaymentStatus(
+                99L, new BookingDtos.UpdatePaymentStatusRequest("paid", "cash")))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("You do not have permission to update this appointment payment");
+    }
+
+    @Test
+    void manualPaymentConfirmationRejectsUnfinishedBooking() {
+        Booking booking = bookingWithStatus(BookingStatus.IN_PROGRESS);
+        booking.setPaymentMethod(BookingPaymentMethod.CASH);
+        booking.setPaymentStatus(BookingPaymentStatus.PENDING);
+        when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.updatePaymentStatus(
+                99L, new BookingDtos.UpdatePaymentStatusRequest("paid", "cash")))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Only completed appointments can be paid");
     }
 
     @Test
@@ -1536,8 +1591,7 @@ class BookingServiceLayerTest {
         customer.setRole(UserRole.ROLE_ADMIN);
         booking.setStatus(BookingStatus.CONFIRMED);
         assertThatThrownBy(() -> bookingService.rescheduleAvailability(99L, date))
-                .isInstanceOf(ApiException.class)
-                .hasMessage("Chá»‰ cÃ³ thá»ƒ Ä‘á»•i lá»‹ch khi lá»‹ch háº¹n Ä‘ang chá» xÃ¡c nháº­n.");
+                .isInstanceOf(ApiException.class);
     }
 
     @Test

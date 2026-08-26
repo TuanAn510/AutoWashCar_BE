@@ -59,9 +59,9 @@ public class BookingServiceLayer {
             List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.IN_QUEUE, BookingStatus.IN_PROGRESS);
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_STATUS_TRANSITIONS = Map.of(
             BookingStatus.PENDING, Set.of(BookingStatus.CONFIRMED, BookingStatus.CANCELLED),
-            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE, BookingStatus.CANCELLED),
-            BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED),
-            BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED, BookingStatus.CANCELLED),
+            BookingStatus.CONFIRMED, Set.of(BookingStatus.IN_QUEUE),
+            BookingStatus.IN_QUEUE, Set.of(BookingStatus.IN_PROGRESS),
+            BookingStatus.IN_PROGRESS, Set.of(BookingStatus.COMPLETED),
             BookingStatus.COMPLETED, Set.of(),
             BookingStatus.CANCELLED, Set.of());
     private final BookingRepository bookingRepository;
@@ -114,6 +114,15 @@ public class BookingServiceLayer {
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
+    /**
+     * Creates a customer booking after validating vehicle ownership and approval, the
+     * one-unfinished-booking rule, lead time, tier booking window, exact service duration,
+     * vehicle overlap, and effective shop capacity.
+     *
+     * <p>The booking starts as {@code PENDING}. Service name, price, duration, and reward
+     * configuration are snapshotted into {@link BookingService} rows; promotion/reward
+     * usage is also recorded. This method does not award loyalty points.
+     */
     public BookingDtos.BookingResponse create(BookingDtos.CreateBookingRequest request) {
         User customer = authService.currentUser();
         Vehicle vehicle = vehicleRepository
@@ -256,6 +265,10 @@ public class BookingServiceLayer {
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
+    /**
+     * Appointment-API adapter for {@link #create(BookingDtos.CreateBookingRequest)}.
+     * It returns the richer appointment detail projection after the booking is persisted.
+     */
     public BookingDtos.AppointmentResponse createAppointment(BookingDtos.CreateBookingRequest request) {
         BookingDtos.BookingResponse created = create(request);
         return appointmentDetail(created.id());
@@ -428,6 +441,11 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
+    /**
+     * Builds the customer's selectable schedule for a date in five-minute increments.
+     * Slots use the selected service/reward duration and enforce tier window, lead time,
+     * business hours, unfinished-vehicle, active-staff, and concurrent-capacity rules.
+     */
     public BookingDtos.AvailabilityResponse availability(
             LocalDate date, Long vehicleId, Long serviceId, Long rewardRedemptionId) {
         User customer = authService.currentUser();
@@ -481,6 +499,10 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
+    /**
+     * Validates one proposed customer start time and returns the first later candidate
+     * when it is unavailable. Creation still repeats all authoritative validations.
+     */
     public BookingDtos.CandidateAvailabilityResponse checkAvailability(
             LocalDateTime scheduledAt, Long vehicleId, Long serviceId, Long rewardRedemptionId) {
         User customer = authService.currentUser();
@@ -529,6 +551,13 @@ public class BookingServiceLayer {
     }
 
     @Transactional
+    /**
+     * Applies one permitted booking lifecycle transition. Role/assignment rules and a
+     * pessimistic lifecycle lock protect the transition; check-in/start/completion
+     * timestamps and required evidence are recorded at their corresponding states.
+     * Completion awards loyalty exactly once without changing payment status.
+     * Cancellation restores claimed promotion/reward resources.
+     */
     public BookingDtos.BookingResponse updateStatus(Long bookingId, BookingStatus status) {
         return updateStatus(bookingId, status, null, statusRequiresEvidence(status));
     }
@@ -590,15 +619,6 @@ public class BookingServiceLayer {
             booking.setCompletedAt(LocalDateTime.now());
             awardPointsForBooking(booking);
             loyaltyService.postPendingBookingEarning(booking);
-            // Cash is collected on-site by staff. When the appointment is completed,
-            // auto-confirm the payment as PAID so admin sees it paid without a separate
-            // confirmation (only admin could previously confirm cash payments).
-            if (booking.getPaymentMethod() == BookingPaymentMethod.CASH
-                    && booking.getPaymentStatus() != BookingPaymentStatus.PAID
-                    && booking.getPaymentStatus() != BookingPaymentStatus.CANCELLED) {
-                booking.setPaymentStatus(BookingPaymentStatus.PAID);
-                booking.setPaidAt(LocalDateTime.now());
-            }
         }
         auditTrailService.record(
                 actor,
@@ -613,6 +633,12 @@ public class BookingServiceLayer {
 
     @Scheduled(cron = "${app.booking.expiration-cron:0 * * * * *}")
     @Transactional
+    /**
+     * Cancels {@code PENDING} bookings whose scheduled time has arrived without store
+     * confirmation. The scheduler restores claimed resources and records
+     * {@code STORE_NOT_CONFIRMED}; a paid booking is flagged {@code refundRequired}
+     * without performing or simulating a gateway refund.
+     */
     public void expireUnconfirmedBookings() {
         expireUnconfirmedBookings(LocalDateTime.now());
     }
@@ -678,13 +704,18 @@ public class BookingServiceLayer {
     }
 
     @Transactional
+    /**
+     * Starts a cash or VNPay payment attempt only after service completion.
+     * Each attempt resets payment state to {@code PENDING}; VNPay receives the snapshotted
+     * booking final amount. Payment creation never awards loyalty points.
+     */
     public BookingDtos.PaymentResponse createPayment(Long bookingId, BookingDtos.CreatePaymentRequest request, String clientIp) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
         requireCanCreatePayment(actor, booking);
         String beforeValue = bookingAuditValue(booking);
-        if (booking.getStatus() == BookingStatus.CANCELLED) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Cancelled appointments cannot be paid");
+        if (booking.getStatus() != BookingStatus.COMPLETED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Only completed appointments can be paid");
         }
         if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Paid appointments cannot be paid again");
@@ -725,6 +756,12 @@ public class BookingServiceLayer {
     }
 
     @Transactional
+    /**
+     * Persists a verified gateway result under the booking lifecycle lock. Duplicate
+     * callbacks cannot overwrite {@code PAID}; unsuccessful attempts become
+     * {@code UNPAID} and remain retryable while the booking is valid. A late success for
+     * an auto-cancelled booking retains cancellation and sets {@code refundRequired}.
+     */
     public void confirmPaymentInternal(
             Long bookingId, BookingPaymentStatus status, BookingPaymentMethod method, String gatewayRef) {
         Booking booking = findBookingForLifecycleUpdate(bookingId);
@@ -769,8 +806,10 @@ public class BookingServiceLayer {
     }
 
     /**
-     * Awards loyalty points for a completed booking, if not already awarded.
-     * Guarded by earnedPoints so points are never awarded twice for the same booking.
+     * Awards loyalty for a completed booking when {@code earnedPoints} is still empty.
+     * Points are based on subtotal divided by the configured amount unit, with a
+     * hard-coded double multiplier when a snapshotted service price is exactly 850,000;
+     * spending uses final amount. No payment-status check is performed here.
      */
     private void awardPointsForBooking(Booking booking) {
         if (booking.getEarnedPoints() != null && booking.getEarnedPoints() > 0) {
@@ -794,11 +833,18 @@ public class BookingServiceLayer {
     }
 
     @Transactional
+    /**
+     * Lets an admin or assigned staff update the embedded booking payment fields.
+     * This operation is separate from {@link BookingStatus} and does not award points.
+     */
     public BookingDtos.AppointmentResponse updatePaymentStatus(
             Long bookingId, BookingDtos.UpdatePaymentStatusRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
         requireCanUpdatePayment(actor, booking);
+        if (booking.getStatus() != BookingStatus.COMPLETED) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Only completed appointments can be paid");
+        }
         String beforeValue = bookingAuditValue(booking);
         BookingPaymentStatus status = request == null
                 ? BookingPaymentStatus.PAID
@@ -830,6 +876,10 @@ public class BookingServiceLayer {
     }
 
     @Transactional
+    /**
+     * Assigns one or two active staff members to a booking. Admin authorization and
+     * duplicate/role checks are enforced before both assignment slots are replaced.
+     */
     public BookingDtos.AppointmentResponse assignStaff(Long bookingId, BookingDtos.AssignStaffRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
@@ -862,6 +912,11 @@ public class BookingServiceLayer {
     }
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
+    /**
+     * Reschedules an appointment for an admin. Only {@code PENDING} bookings may move;
+     * exact snapshotted duration, vehicle overlap, and capacity are revalidated while
+     * excluding the booking itself.
+     */
     public BookingDtos.AppointmentResponse reschedule(Long bookingId, BookingDtos.RescheduleRequest request) {
         Booking booking = findBooking(bookingId);
         User actor = authService.currentUser();
@@ -901,6 +956,11 @@ public class BookingServiceLayer {
     }
 
     @Transactional(readOnly = true)
+    /**
+     * Produces five-minute admin reschedule choices for a {@code PENDING} booking using
+     * its persisted duration. The current booking is excluded from overlap and capacity
+     * calculations; tier booking-window limits are intentionally not applied.
+     */
     public BookingDtos.AvailabilityResponse rescheduleAvailability(Long bookingId, LocalDate date) {
         Booking booking = findBooking(bookingId);
         requireAdmin(authService.currentUser());
@@ -1004,6 +1064,9 @@ public class BookingServiceLayer {
 
     private void requireCanUpdateStatus(User actor, Booking booking, BookingStatus requestedStatus) {
         if (actor.getRole() == UserRole.ROLE_ADMIN) {
+            if (requestedStatus == BookingStatus.CANCELLED && booking.getStatus() != BookingStatus.PENDING) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Only pending appointments can be cancelled");
+            }
             return;
         }
         if (actor.getRole() == UserRole.ROLE_STAFF && isAssignedStaff(actor, booking)) {
@@ -1017,6 +1080,9 @@ public class BookingServiceLayer {
         if (actor.getRole() == UserRole.ROLE_CUSTOMER
                 && sameUser(actor, booking.getCustomer())
                 && requestedStatus == BookingStatus.CANCELLED) {
+            if (booking.getStatus() != BookingStatus.PENDING) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Only pending appointments can be cancelled");
+            }
             if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Lịch hẹn đã được thanh toán nên không thể hủy.");
             }
@@ -1061,6 +1127,7 @@ public class BookingServiceLayer {
         return sameUser(actor, booking.getAssignedStaff()) || sameUser(actor, booking.getSecondaryAssignedStaff());
     }
 
+    /** Restores promotion usage and returns a reward redemption when a booking is cancelled. */
     private void restoreCancellationResources(Booking booking) {
         if (booking.getPromotion() != null) {
             Promotion promotion = booking.getPromotion();
@@ -1256,6 +1323,7 @@ public class BookingServiceLayer {
         }
     }
 
+    /** Rejects a requested interval that overlaps another occupied booking for the vehicle. */
     private void validateVehicleNoOverlap(
             Vehicle vehicle, LocalDateTime scheduledAt, int reservationDurationMinutes, Long ignoredBookingId) {
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);
@@ -1268,12 +1336,14 @@ public class BookingServiceLayer {
         }
     }
 
+    /** Enforces one unfinished booking per vehicle regardless of the prior scheduled date. */
     private void validateVehicleHasNoUnfinishedBooking(Vehicle vehicle) {
         if (!bookingRepository.findByVehicleAndStatusInOrderByScheduledAtAsc(vehicle, OCCUPIED_STATUSES).isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "This vehicle already has an unfinished appointment");
         }
     }
 
+    /** Enforces configured capacity capped by the number of active staff for the interval. */
     private void validateShopCapacity(
             LocalDateTime scheduledAt, int reservationDurationMinutes, Long ignoredBookingId) {
         LocalDateTime endAt = endAt(scheduledAt, reservationDurationMinutes);

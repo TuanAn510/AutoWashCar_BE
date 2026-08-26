@@ -128,6 +128,10 @@ public class UserAdminService {
     }
 
     @Transactional
+    /**
+     * Activates or locks a user account and records the administrative status change.
+     * Spring Security checks {@code isActive} when loading the user on later requests.
+     */
     public UserAdminDtos.UserSearchResponse updateStatus(Long id, boolean active) {
         User user = findUser(id);
         boolean before = user.isActive();
