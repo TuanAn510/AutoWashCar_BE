@@ -617,6 +617,12 @@ public class BookingServiceLayer {
                 statusEvidenceUrl = evidenceUrl;
             }
             booking.setCompletedAt(LocalDateTime.now());
+            if (booking.getPaymentStatus() != BookingPaymentStatus.PAID) {
+                booking.setPaymentMethod(BookingPaymentMethod.CASH);
+                booking.setPaymentStatus(BookingPaymentStatus.PAID);
+                booking.setPaidAt(LocalDateTime.now());
+                notifyPaymentSuccess(booking);
+            }
             awardPointsForBooking(booking);
             loyaltyService.postPendingBookingEarning(booking);
         }
@@ -717,7 +723,7 @@ public class BookingServiceLayer {
         if (booking.getPaymentStatus() == BookingPaymentStatus.PAID) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Appointment has already been paid");
         }
-        if (booking.getStatus() != BookingStatus.CONFIRMED) {
+        if (booking.getStatus() == BookingStatus.PENDING || booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Only confirmed appointments can be paid");
         }
         BookingPaymentMethod method = request.resolvedMethod();

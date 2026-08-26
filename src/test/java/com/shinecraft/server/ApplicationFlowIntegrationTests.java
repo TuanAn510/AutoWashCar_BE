@@ -1477,18 +1477,10 @@ class ApplicationFlowIntegrationTests {
         updateBookingStatus(adminToken, cashBookingId, "IN_PROGRESS");
         updateBookingStatus(adminToken, cashBookingId, "COMPLETED");
 
-        mockMvc.perform(patch("/api/appointments/{id}/payment-status", cashBookingId)
-                        .header("Authorization", bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "paymentStatus": "paid",
-                                  "paymentMethod": "cash"
-                                }
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.paymentStatus", is("paid")))
-                .andExpect(jsonPath("$.data.paymentMethod", is("cash")));
+        Booking completedCashBooking = bookingRepository.findById(cashBookingId).orElseThrow();
+        assertThat(completedCashBooking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(completedCashBooking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(completedCashBooking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.CASH);
     }
 
     @Test

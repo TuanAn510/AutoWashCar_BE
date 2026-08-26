@@ -799,8 +799,9 @@ class BookingServiceLayerTest {
         assertThat(booking.getCompletedAt()).isNotNull();
         assertThat(booking.getCompletionImageUrl()).isEqualTo("/uploads/status-evidence.jpg");
         assertThat(booking.getEarnedPoints()).isEqualTo(2);
-        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
-        assertThat(booking.getPaidAt()).isNull();
+        assertThat(booking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.CASH);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getPaidAt()).isNotNull();
         verify(loyaltyService).earnPoints(
                 customer, BigDecimal.valueOf(10000), 2, "Earned points from booking #99", booking);
         verify(loyaltyService).postPendingBookingEarning(booking);
@@ -1186,6 +1187,9 @@ class BookingServiceLayerTest {
 
         assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED);
         assertThat(booking.getCheckInAt()).isEqualTo(checkInAt);
+        assertThat(booking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.CASH);
+        assertThat(booking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(booking.getPaidAt()).isNotNull();
 
         Booking cancellable = bookingWithStatus(BookingStatus.CONFIRMED);
         cancellable.setAssignedStaff(staff);
@@ -1255,21 +1259,34 @@ class BookingServiceLayerTest {
     }
 
     @Test
-    void onlyConfirmedUnpaidBookingCanStartPayment() {
-        for (BookingStatus status : List.of(
-                BookingStatus.PENDING,
-                BookingStatus.IN_QUEUE,
-                BookingStatus.IN_PROGRESS,
-                BookingStatus.COMPLETED,
-                BookingStatus.CANCELLED)) {
-            Booking nonConfirmed = bookingWithStatus(status);
-            nonConfirmed.setPaymentStatus(BookingPaymentStatus.UNPAID);
-            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(nonConfirmed));
+    void bookingCanStartPaymentAfterConfirmationUntilCancelledOrPaid() {
+        for (BookingStatus status : List.of(BookingStatus.PENDING, BookingStatus.CANCELLED)) {
+            Booking blocked = bookingWithStatus(status);
+            blocked.setPaymentStatus(BookingPaymentStatus.UNPAID);
+            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(blocked));
 
             assertThatThrownBy(() -> bookingService.createPayment(
                     99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1"))
                     .isInstanceOf(ApiException.class)
                     .hasMessage("Only confirmed appointments can be paid");
+        }
+
+        for (BookingStatus status : List.of(
+                BookingStatus.CONFIRMED,
+                BookingStatus.IN_QUEUE,
+                BookingStatus.IN_PROGRESS,
+                BookingStatus.COMPLETED)) {
+            Booking allowed = bookingWithStatus(status);
+            allowed.setPaymentStatus(BookingPaymentStatus.UNPAID);
+            when(bookingRepository.findById(99L)).thenReturn(java.util.Optional.of(allowed));
+            when(vnPayService.createPaymentUrl(allowed, "127.0.0.1"))
+                    .thenReturn("https://pay.test?vnp_TxnRef=99_" + status.name().toLowerCase() + "&x=1");
+
+            BookingDtos.PaymentResponse response = bookingService.createPayment(
+                    99L, new BookingDtos.CreatePaymentRequest("vnpay"), "127.0.0.1");
+
+            assertThat(response.paymentId()).startsWith("99_");
+            assertThat(allowed.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
         }
 
         Booking paid = bookingWithStatus(BookingStatus.CONFIRMED);
