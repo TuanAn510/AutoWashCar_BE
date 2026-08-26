@@ -15,6 +15,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.BatchSize;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,6 +64,7 @@ public class Vehicle extends BaseEntity {
 
     @OneToMany(mappedBy = "vehicle", fetch = FetchType.LAZY)
     @OrderBy("sortOrder ASC")
+    @BatchSize(size = 20)
     private List<VehicleImage> images = new ArrayList<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
