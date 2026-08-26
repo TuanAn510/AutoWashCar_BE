@@ -217,7 +217,7 @@ public class ReportService {
         List<LoyaltyTransaction> transactions = transactionsInRange(range);
         List<LoyaltyAccount> accounts = loyaltyAccountRepository.findAll().stream()
                 .filter(account -> account.getCustomer() != null)
-                .filter(account -> createdInRange(account.getCustomer().getCreatedAt(), range))
+                .filter(account -> loyaltyAccountInRange(account, range))
                 .toList();
         Map<String, Long> tiers = accounts.stream()
                 .collect(java.util.stream.Collectors.groupingBy(
@@ -481,6 +481,13 @@ public class ReportService {
 
     private boolean createdInRange(LocalDateTime value, ReportDtos.ReportRange range) {
         return value != null && dateInRange(value, range);
+    }
+
+    private boolean loyaltyAccountInRange(LoyaltyAccount account, ReportDtos.ReportRange range) {
+        LocalDateTime joinedAt = account.getCreatedAt() != null
+                ? account.getCreatedAt()
+                : account.getCustomer().getCreatedAt();
+        return createdInRange(joinedAt, range);
     }
 
     private boolean dateInRange(LocalDateTime value, ReportDtos.ReportRange range) {

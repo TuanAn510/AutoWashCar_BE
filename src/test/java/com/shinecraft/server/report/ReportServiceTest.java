@@ -226,6 +226,8 @@ class ReportServiceTest {
         silver.setName("Silver");
         LoyaltyAccount account = new LoyaltyAccount();
         account.setMembershipTier(silver);
+        account.setCustomer(activeCustomer);
+        account.setCreatedAt(LocalDateTime.parse("2026-02-01T09:00:00"));
         Promotion activePromotion = promotion("PERCENTAGE", 2, true, "2026-02-01T00:00:00", "2026-12-31T23:59:59");
         Promotion expiredPromotion = promotion("FIXED_AMOUNT", 1, true, "2026-01-01T00:00:00", "2026-02-02T00:00:00");
 
@@ -279,6 +281,30 @@ class ReportServiceTest {
         assertThat(vehicles.mostCommonVehicleBrands().get(0)).satisfies(item -> {
             assertThat(item.brand()).isEqualTo("Toyota");
             assertThat(item.total()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void loyaltyReportCountsOnlyMembersJoinedInSelectedMonth() {
+        MembershipTier silver = new MembershipTier();
+        silver.setName("Silver");
+        MembershipTier gold = new MembershipTier();
+        gold.setName("Gold");
+        LoyaltyAccount januaryMember = loyaltyAccount(1L, silver, "2026-01-15T09:00:00");
+        LoyaltyAccount augustMember = loyaltyAccount(2L, gold, "2026-08-15T09:00:00");
+        ReportDtos.ReportRange january = new ReportDtos.ReportRange(
+                LocalDateTime.parse("2026-01-01T00:00:00"),
+                LocalDateTime.parse("2026-02-01T00:00:00"));
+
+        when(transactionRepository.findAll()).thenReturn(List.of());
+        when(loyaltyAccountRepository.findAll()).thenReturn(List.of(januaryMember, augustMember));
+
+        ReportDtos.LoyaltyReport loyalty = reportService.loyalty(january);
+
+        assertThat(loyalty.totalLoyaltyMembers()).isEqualTo(1);
+        assertThat(loyalty.membershipTierDistribution()).singleElement().satisfies(item -> {
+            assertThat(item.tier()).isEqualTo("Silver");
+            assertThat(item.total()).isEqualTo(1);
         });
     }
 
@@ -429,6 +455,16 @@ class ReportServiceTest {
         user.setPasswordHash("hash");
         user.setActive(true);
         return user;
+    }
+
+    private LoyaltyAccount loyaltyAccount(Long customerId, MembershipTier tier, String joinedAt) {
+        User customer = user(customerId);
+        customer.setCreatedAt(LocalDateTime.parse(joinedAt));
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setCustomer(customer);
+        account.setMembershipTier(tier);
+        account.setCreatedAt(LocalDateTime.parse(joinedAt));
+        return account;
     }
 
     private Vehicle vehicle(String brand, boolean active) {
