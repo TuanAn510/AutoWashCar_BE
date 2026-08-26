@@ -1538,6 +1538,8 @@ class ApplicationFlowIntegrationTests {
         Booking completed = bookingRepository.findById(bookingId).orElseThrow();
         LoyaltyAccount afterCompletion = loyaltyAccountRepository.findByCustomer(customer.user()).orElseThrow();
         LoyaltyTransaction postedEarning = bookingEarning(bookingId);
+        assertThat(completed.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PAID);
+        assertThat(completed.getPaymentMethod()).isEqualTo(BookingPaymentMethod.VNPAY);
         assertThat(postedEarning.getStatus()).isEqualTo(LoyaltyTransactionStatus.POSTED);
         assertThat(postedEarning.getPostedAt()).isNotNull();
         assertThat(postedEarning.getExpiresAt()).isEqualTo(postedEarning.getPostedAt().plusMonths(12));
