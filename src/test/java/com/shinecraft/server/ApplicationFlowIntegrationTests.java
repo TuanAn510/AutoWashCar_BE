@@ -1406,20 +1406,12 @@ class ApplicationFlowIntegrationTests {
         String adminToken = loginAdmin();
         Long bookingId = createBooking(customer, null);
 
-        updateBookingStatus(adminToken, bookingId, "CONFIRMED");
-        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
-        booking.setScheduledAt(LocalDate.now().minusDays(1).atTime(9, 17));
-        bookingRepository.saveAndFlush(booking);
-        updateBookingStatus(adminToken, bookingId, "IN_QUEUE");
-        updateBookingStatus(adminToken, bookingId, "IN_PROGRESS");
-        updateBookingStatus(adminToken, bookingId, "COMPLETED");
-
         mockMvc.perform(post("/api/appointments/{id}/payment", bookingId)
                         .header("Authorization", bearer(customer.token()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "method": "cash"
+                                  "method": "vnpay"
                                 }
                                 """))
                 .andExpect(status().isBadRequest());
@@ -1438,13 +1430,54 @@ class ApplicationFlowIntegrationTests {
                 .andExpect(jsonPath("$.success", is(true)))
                 .andExpect(jsonPath("$.data.paymentUrl", notNullValue()))
                 .andExpect(jsonPath("$.data.paymentId", notNullValue()))
-                .andExpect(jsonPath("$.data.method", is("cash")))
+                .andExpect(jsonPath("$.data.method", is("vnpay")))
                 .andExpect(jsonPath("$.data.amount", notNullValue()));
 
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getPaymentStatus())
                 .isEqualTo(BookingPaymentStatus.PENDING);
 
         mockMvc.perform(patch("/api/appointments/{id}/payment-status", bookingId)
+                        .header("Authorization", bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "paymentStatus": "paid",
+                                  "paymentMethod": "vnpay"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.paymentStatus", is("paid")))
+                .andExpect(jsonPath("$.data.paymentMethod", is("vnpay")));
+
+        CustomerContext cashCustomer = registerCustomer();
+        Long cashBookingId = createBooking(cashCustomer, null);
+        updateBookingStatus(adminToken, cashBookingId, "CONFIRMED");
+
+        mockMvc.perform(post("/api/appointments/{id}/payment", cashBookingId)
+                        .header("Authorization", bearer(cashCustomer.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "method": "cash"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)))
+                .andExpect(jsonPath("$.data.paymentUrl").doesNotExist())
+                .andExpect(jsonPath("$.data.paymentId").doesNotExist())
+                .andExpect(jsonPath("$.data.method", is("cash")));
+
+        Booking cashBooking = bookingRepository.findById(cashBookingId).orElseThrow();
+        assertThat(cashBooking.getPaymentStatus()).isEqualTo(BookingPaymentStatus.PENDING);
+        assertThat(cashBooking.getPaymentMethod()).isEqualTo(BookingPaymentMethod.CASH);
+
+        cashBooking.setScheduledAt(LocalDate.now().minusDays(1).atTime(9, 17));
+        bookingRepository.saveAndFlush(cashBooking);
+        updateBookingStatus(adminToken, cashBookingId, "IN_QUEUE");
+        updateBookingStatus(adminToken, cashBookingId, "IN_PROGRESS");
+        updateBookingStatus(adminToken, cashBookingId, "COMPLETED");
+
+        mockMvc.perform(patch("/api/appointments/{id}/payment-status", cashBookingId)
                         .header("Authorization", bearer(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
