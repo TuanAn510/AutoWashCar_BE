@@ -9,9 +9,11 @@ import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import com.shinecraft.server.user.UserRole;
 import java.time.LocalDateTime;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -78,24 +80,19 @@ public class VehicleService {
         requireAdmin();
         int resolvedPage = page == null || page < 1 ? 1 : page;
         int resolvedLimit = limit == null || limit < 1 ? 20 : Math.min(limit, 100);
-        String normalizedKeyword = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+        String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.trim().toLowerCase(Locale.ROOT);
         String normalizedCarType = normalizeOptionalCarType(carType);
 
-        List<Vehicle> filtered = vehicleRepository.findAll().stream()
-                .filter(Vehicle::isActive)
-                .filter(vehicle -> normalizedCarType == null || normalizedCarType.equals(vehicle.getCarType()))
-                .filter(vehicle -> matchesKeyword(vehicle, normalizedKeyword))
-                .sorted(comparator(sortBy, sortOrder))
-                .toList();
-
-        long total = filtered.size();
-        int from = Math.min((resolvedPage - 1) * resolvedLimit, filtered.size());
-        int to = Math.min(from + resolvedLimit, filtered.size());
-        int totalPages = total == 0 ? 0 : (int) Math.ceil((double) total / resolvedLimit);
+        PageRequest pageable = PageRequest.of(resolvedPage - 1, resolvedLimit, buildSort(sortBy, sortOrder));
+        Page<Vehicle> vehiclePage = vehicleRepository.findFiltered(normalizedKeyword, normalizedCarType, pageable);
 
         return new VehicleDtos.VehiclePage(
-                filtered.subList(from, to).stream().map(VehicleDtos.VehicleResponse::from).toList(),
-                new PaginationMeta(resolvedPage, resolvedLimit, total, totalPages));
+                vehiclePage.getContent().stream().map(VehicleDtos.VehicleResponse::from).toList(),
+                new PaginationMeta(
+                        vehiclePage.getNumber() + 1,
+                        vehiclePage.getSize(),
+                        vehiclePage.getTotalElements(),
+                        vehiclePage.getTotalPages()));
     }
 
     @Transactional(readOnly = true)
@@ -544,38 +541,19 @@ public class VehicleService {
         }
     }
 
-    private boolean matchesKeyword(Vehicle vehicle, String keyword) {
-        if (keyword.isBlank()) {
-            return true;
-        }
-        String haystack = String.join(
-                        " ",
-                        safe(vehicle.getLicensePlate()),
-                        safe(vehicle.getBrand()),
-                        safe(vehicle.getModel()),
-                        safe(vehicle.getCustomer().getFullName()),
-                        safe(vehicle.getCustomer().getPhone()))
-                .toLowerCase(Locale.ROOT);
-        return haystack.contains(keyword);
-    }
-
-    private Comparator<Vehicle> comparator(String sortBy, String sortOrder) {
-        Comparator<Vehicle> comparator = switch (sortBy == null ? "" : sortBy) {
-            case "licensePlate" -> Comparator.comparing(Vehicle::getLicensePlate, String.CASE_INSENSITIVE_ORDER);
-            case "brand" -> Comparator.comparing(Vehicle::getBrand, String.CASE_INSENSITIVE_ORDER);
-            case "model" -> Comparator.comparing(Vehicle::getModel, String.CASE_INSENSITIVE_ORDER);
-            case "year", "manufactureYear" -> Comparator.comparing(
-                    Vehicle::getManufactureYear, Comparator.nullsLast(Integer::compareTo));
-            case "carType" -> Comparator.comparing(Vehicle::getCarType, String.CASE_INSENSITIVE_ORDER);
-            case "owner", "customer", "displayName" -> Comparator.comparing(
-                    vehicle -> vehicle.getCustomer().getFullName(), String.CASE_INSENSITIVE_ORDER);
-            case "updatedAt" -> Comparator.comparing(Vehicle::getUpdatedAt);
-            default -> Comparator.comparing(Vehicle::getCreatedAt);
+    private Sort buildSort(String sortBy, String sortOrder) {
+        String field = switch (sortBy == null ? "" : sortBy) {
+            case "licensePlate" -> "licensePlate";
+            case "brand" -> "brand";
+            case "model" -> "model";
+            case "year", "manufactureYear" -> "manufactureYear";
+            case "carType" -> "carType";
+            case "owner", "customer", "displayName" -> "customer.fullName";
+            case "updatedAt" -> "updatedAt";
+            default -> "createdAt";
         };
-        if ("asc".equalsIgnoreCase(sortOrder)) {
-            return comparator;
-        }
-        return comparator.reversed();
+        boolean asc = "asc".equalsIgnoreCase(sortOrder);
+        return asc ? Sort.by(field).ascending() : Sort.by(field).descending();
     }
 
     private String normalizeOptionalCarType(String carType) {
@@ -593,10 +571,6 @@ public class VehicleService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid car type");
         }
         return normalized;
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value;
     }
 
     private void saveImages(Vehicle vehicle, List<MultipartFile> files) {
