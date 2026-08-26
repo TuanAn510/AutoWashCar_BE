@@ -352,8 +352,23 @@ public class VehicleService {
     private ResolvedBrandModel resolveBrandModel(VehicleDtos.VehicleRequest request) {
         VehicleBrand brand = resolveBrand(request.resolvedBrandId());
         VehicleModel model = resolveModel(request.resolvedModelId(), brand);
-        boolean suggestedBrand = hasText(request.suggestedBrandName());
-        boolean suggestedModel = hasText(request.suggestedModelName());
+
+        // Nếu không tìm thấy bằng ID (chọn "Khác") nhưng tên gõ vào trùng với
+        // hãng/dòng có sẵn trong hệ thống → coi như chọn từ catalog, không cần
+        // admin duyệt.
+        boolean brandResolvedByName = false;
+        if (brand == null && hasText(request.suggestedBrandName())) {
+            brand = brandRepository.findByNameIgnoreCase(request.suggestedBrandName().trim()).orElse(null);
+            brandResolvedByName = brand != null;
+        }
+        boolean modelResolvedByName = false;
+        if (model == null && hasText(request.suggestedModelName()) && brand != null) {
+            model = modelRepository.findByBrandIdAndNameIgnoreCase(brand.getId(), request.suggestedModelName().trim()).orElse(null);
+            modelResolvedByName = model != null;
+        }
+
+        boolean suggestedBrand = hasText(request.suggestedBrandName()) && !brandResolvedByName;
+        boolean suggestedModel = hasText(request.suggestedModelName()) && !modelResolvedByName;
         boolean otherBrand = isOther(request.brand());
         boolean otherModel = isOther(request.model());
         boolean hasCatalogSelection = request.resolvedBrandId() != null || request.resolvedModelId() != null;
