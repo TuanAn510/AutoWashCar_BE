@@ -38,8 +38,12 @@ public class LoyaltyController {
 
     @GetMapping("/api/loyalty/customers")
     @PreAuthorize("hasAnyAuthority('ROLE_STAFF', 'ROLE_ADMIN')")
-    ApiListResponse<Map<String, Object>> loyaltyCustomers(@RequestParam(required = false) String search) {
-        return ApiListResponse.ok("Loyalty customers retrieved successfully", loyaltyService.customersWithLoyalty(search));
+    ApiListResponse<Map<String, Object>> loyaltyCustomers(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long membershipTierId) {
+        return ApiListResponse.ok(
+                "Loyalty customers retrieved successfully",
+                loyaltyService.customersWithLoyalty(search, membershipTierId));
     }
 
     @GetMapping("/api/loyalty/customers/{customerId}")

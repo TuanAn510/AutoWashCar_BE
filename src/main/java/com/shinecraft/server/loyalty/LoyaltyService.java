@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.AbstractMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -117,14 +118,20 @@ public class LoyaltyService {
     }
 
     @Transactional
-    public List<Map<String, Object>> customersWithLoyalty(String search) {
+    public List<Map<String, Object>> customersWithLoyalty(String search, Long membershipTierId) {
         String keyword = search == null ? "" : search.trim().toLowerCase();
         return userRepository.findAll().stream()
                 .filter(user -> user.getRole() == UserRole.ROLE_CUSTOMER)
                 .filter(user -> keyword.isBlank()
                         || user.getFullName().toLowerCase().contains(keyword)
                         || user.getPhone().contains(keyword))
-                .map(user -> {
+                .map(user -> new AbstractMap.SimpleEntry<>(user, getOrCreateAccount(user)))
+                .filter(entry -> membershipTierId == null
+                        || (entry.getValue().getMembershipTier() != null
+                            && entry.getValue().getMembershipTier().getId().equals(membershipTierId)))
+                .map(entry -> {
+                    User user = entry.getKey();
+                    LoyaltyAccount account = entry.getValue();
                     Map<String, Object> customer = new LinkedHashMap<>();
                     customer.put("_id", String.valueOf(user.getId()));
                     customer.put("displayName", user.getFullName());
@@ -136,7 +143,7 @@ public class LoyaltyService {
 
                     Map<String, Object> item = new LinkedHashMap<>();
                     item.put("customer", customer);
-                    item.put("loyaltyAccount", accountResponse(getOrCreateAccount(user)));
+                    item.put("loyaltyAccount", accountResponse(account));
                     return item;
                 })
                 .toList();
