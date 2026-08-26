@@ -22,6 +22,10 @@ public class VnPayService {
         this.config = config;
     }
 
+    /**
+     * Creates a signed VNPay payment URL for the booking's current final amount. The
+     * transaction reference embeds the booking id followed by a random attempt id.
+     */
     public String createPaymentUrl(Booking booking, String clientIp) {
         Map<String, String> params = new TreeMap<>();
 
@@ -48,6 +52,7 @@ public class VnPayService {
         return config.payUrl() + "?" + buildQueryString(params);
     }
 
+    /** Verifies callback integrity by recomputing HMAC-SHA512 without hash fields. */
     public boolean verifyIpn(Map<String, String> params) {
         String receivedHash = params.get("vnp_SecureHash");
         if (receivedHash == null) return false;
@@ -60,6 +65,7 @@ public class VnPayService {
         return receivedHash.equals(computedHash);
     }
 
+    /** Requires both VNPay response and transaction status code {@code 00}. */
     public boolean isPaymentSuccessful(Map<String, String> params) {
         return "00".equals(params.get("vnp_ResponseCode"))
                 && "00".equals(params.get("vnp_TransactionStatus"));

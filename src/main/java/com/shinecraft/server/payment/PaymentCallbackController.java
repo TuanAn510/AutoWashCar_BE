@@ -35,6 +35,11 @@ public class PaymentCallbackController {
 
     // --- VNPay Return (browser redirect) ---
     @GetMapping("/vnpay/return")
+    /**
+     * Handles VNPay's signed browser return, persists the payment outcome, and redirects
+     * the browser to the customer result page. Failure changes payment to retryable
+     * {@code UNPAID}; it does not cancel the booking.
+     */
     public String vnpayReturn(HttpServletRequest request) {
         Map<String, String> params = extractParams(request);
 
@@ -58,6 +63,11 @@ public class PaymentCallbackController {
 
     // --- VNPay IPN (server-to-server) ---
     @PostMapping("/vnpay/ipn")
+    /**
+     * Handles the signed server-to-server VNPay notification. Both return and IPN may
+     * arrive, so {@code BookingServiceLayer.confirmPaymentInternal} provides idempotent
+     * protection for an already-paid booking.
+     */
     public ResponseEntity<Map<String, String>> vnpayIpn(HttpServletRequest request) {
         Map<String, String> params = extractParams(request);
 

@@ -30,6 +30,7 @@ public class ReportExportService {
         this.reportService = reportService;
     }
 
+    /** Exports the advanced analytics sections and current operational alerts as XLSX. */
     public byte[] excel(ReportDtos.ReportRange range) {
         try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             CellStyle header = workbook.createCellStyle();
@@ -51,6 +52,7 @@ public class ReportExportService {
         }
     }
 
+    /** Exports the advanced analytics sections and current operational alerts as PDF. */
     public byte[] pdf(ReportDtos.ReportRange range) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         Document document = new Document();

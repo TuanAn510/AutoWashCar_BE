@@ -341,6 +341,11 @@ public class LoyaltyService {
     }
 
     @Transactional
+    /**
+     * Returns the customer's account, creating it at the zero-point tier when absent.
+     * Access may upgrade to a higher lifetime-point tier but never downgrades; downgrade
+     * is reserved for the scheduled monthly review.
+     */
     public LoyaltyAccount getOrCreateAccount(User customer) {
         LoyaltyAccount account = accountRepository.findByCustomer(customer).orElseGet(() -> {
             LoyaltyAccount newAccount = new LoyaltyAccount();
@@ -370,6 +375,11 @@ public class LoyaltyService {
     }
 
     @Transactional
+    /**
+     * Creates the booking-linked EARN transaction and point lot exactly once. Completed
+     * bookings are posted immediately; the legacy non-completed path creates PENDING
+     * earning data for later posting or reversal.
+     */
     public void earnPoints(User customer, BigDecimal amount, int points, String description, Object booking) {
         LocalDateTime now = LocalDateTime.now();
         Booking linkedBooking = booking instanceof Booking value ? value : null;
@@ -400,6 +410,7 @@ public class LoyaltyService {
     }
 
     @Transactional
+    /** Posts a legacy pending booking earning and updates points, spending, visits, and tier. */
     public void postPendingBookingEarning(Booking booking) {
         transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
                 .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
@@ -415,6 +426,7 @@ public class LoyaltyService {
     }
 
     @Transactional
+    /** Reverses only a legacy pending booking earning when its booking is cancelled. */
     public void reversePendingBookingEarning(Booking booking) {
         transactionRepository.findByBookingAndType(booking, LoyaltyTransactionType.EARN)
                 .filter(transaction -> transaction.getStatus() == LoyaltyTransactionStatus.PENDING)
@@ -474,6 +486,11 @@ public class LoyaltyService {
 
     @Scheduled(cron = "0 0 2 1 * *")
     @Transactional
+    /**
+     * Runs monthly point/redemption expiry and recalculates every active customer's tier
+     * from earned activity within the configured expiry window. Unlike access-time
+     * upgrades, this review can upgrade or downgrade and saves a monthly snapshot.
+     */
     public void monthlyReviewAndExpiry() {
         LocalDateTime now = LocalDateTime.now();
         expireOldPoints(now);
