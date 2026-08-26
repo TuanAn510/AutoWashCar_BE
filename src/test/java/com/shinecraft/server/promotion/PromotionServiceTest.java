@@ -14,6 +14,7 @@ import com.shinecraft.server.loyalty.LoyaltyAccount;
 import com.shinecraft.server.loyalty.LoyaltyService;
 import com.shinecraft.server.loyalty.MembershipTier;
 import com.shinecraft.server.loyalty.MembershipTierRepository;
+import com.shinecraft.server.notification.NotificationService;
 import com.shinecraft.server.user.AuthService;
 import com.shinecraft.server.user.User;
 import java.math.BigDecimal;
@@ -30,6 +31,7 @@ class PromotionServiceTest {
     private AuditLogRepository auditLogRepository;
     private MembershipTierRepository tierRepository;
     private LoyaltyService loyaltyService;
+    private NotificationService notificationService;
     private AuthService authService;
     private PromotionService promotionService;
 
@@ -39,13 +41,15 @@ class PromotionServiceTest {
         auditLogRepository = mock(AuditLogRepository.class);
         tierRepository = mock(MembershipTierRepository.class);
         loyaltyService = mock(LoyaltyService.class);
+        notificationService = mock(NotificationService.class);
         authService = mock(AuthService.class);
         promotionService = new PromotionService(
                 promotionRepository,
                 auditLogRepository,
                 tierRepository,
                 loyaltyService,
-                authService);
+                authService,
+                notificationService);
     }
 
     @Test
